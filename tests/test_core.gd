@@ -2,6 +2,8 @@ extends SceneTree
 
 const State=preload("res://scripts/state.gd")
 const Battle=preload("res://scripts/battle.gd")
+const World=preload("res://scripts/world.gd")
+const Assertions=preload("res://tests/assertions.gd")
 var checks=0
 var failures=0
 
@@ -20,7 +22,11 @@ func run():
 	check(s._valid(s.data),"initial state validates")
 	check(s.save_progress(),"first save")
 	var initial=int(s.data.coins)
-	check(s.build("forge",Vector2i(1,1)).begins_with("Построено"),"place forge")
+	var world=World.new(s)
+	check(s.build("forge",Vector2i(1,1)).begins_with("Заложено"),"place forge foundation")
+	check(s.level("forge")==0 and not s.hero_available("lina"),"foundation has no finished building effects")
+	world.rebuild_navigation()
+	for i in 1500:world.step(1.0/30.0)
 	check(s.level("forge")==1 and s.data.coins==initial-80,"cost charged once")
 	var before=s.data.duplicate(true)
 	s.build("lab",Vector2i(1,1));check(s.data==before,"occupied tile cannot spend resources")
@@ -28,7 +34,8 @@ func run():
 	s.build("wall",Vector2i(-1,3));check(s.data==before,"outside grid cannot build")
 	check(s.recruit("guard").begins_with("Нанят"),"forge unlocks guard")
 	var reloaded=State.new(path);check(reloaded.load_progress(),"reload valid save")
-	check(reloaded.data==s.data,"save roundtrip")
+	check(Assertions.same(reloaded.data,s.data),"save roundtrip with only binary float rounding tolerance")
+	check(not Assertions.same({"value":1.0},{"value":1.000001}) and not Assertions.same({"uid":1},{"uid":1.0}),"roundtrip comparison rejects gameplay drift and changed integer identities")
 	var bad=s.data.duplicate(true);bad.army.militia=-1;check(not s._valid(bad),"reject negative army")
 	bad=s.data.duplicate(true);bad.buildings.append(bad.buildings[0].duplicate());check(not s._valid(bad),"reject overlapping saved buildings")
 	s.data.coins=0;before=s.data.duplicate(true);s.recruit("militia");check(s.data==before,"recruit cannot overdraw")

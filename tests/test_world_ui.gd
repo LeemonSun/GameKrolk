@@ -8,12 +8,22 @@ func run():
 	app.state.before_save=Callable();app.state.reset();app.state.save_path="res://work/world-ui.json"
 	app.world=load("res://scripts/world.gd").new(app.state);app.base.world=app.world
 	app.world.notice.connect(app._notice);app.world.raid_finished.connect(func(_won):app._refresh())
-	app.state.research("forestry");app.state.research("mining")
-	app.state.build("lumber",Vector2i(12,11));app.state.build("mine",Vector2i(19,8))
+	app.state.research("forestry");app.state.research("mining");app.state.research("agriculture")
+	app.state.build("lumber",Vector2i(12,11));app.state.build("mine",Vector2i(19,9));app.state.build("farm",Vector2i(21,10))
 	app.world.rebuild_navigation();app._refresh()
-	for i in 900:app.world.step(1.0/30.0)
+	for i in 150:app.world.step(1.0/30.0)
+	await process_frame;await RenderingServer.frame_post_draw
+	root.get_texture().get_image().save_png("res://work/ui-construction.png")
+	for i in 1950:app.world.step(1.0/30.0)
+	app._refresh()
 	await process_frame;await RenderingServer.frame_post_draw
 	root.get_texture().get_image().save_png("res://work/ui-world.png")
+	app._set_tab("people")
+	await process_frame;await RenderingServer.frame_post_draw
+	root.get_texture().get_image().save_png("res://work/ui-people.png")
+	app._set_tab("goals")
+	await process_frame;await RenderingServer.frame_post_draw
+	root.get_texture().get_image().save_png("res://work/ui-goals.png")
 	app._set_tab("tech")
 	await process_frame;await RenderingServer.frame_post_draw
 	root.get_texture().get_image().save_png("res://work/ui-tech.png")

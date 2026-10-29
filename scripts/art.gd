@@ -38,7 +38,14 @@ static func building(c:CanvasItem,p:Vector2,id:String,level:int,selected:bool=fa
 	var gold=Color("cfb57b")
 	if selected:c.draw_rect(Rect2(-33,-34,66,70),Color(0.85,0.73,0.45,0.2));c.draw_rect(Rect2(-33,-34,66,70),gold,false,2)
 	c.draw_rect(Rect2(-28,12,63,20),Color(0.04,0.06,0.04,0.4))
-	if id=="wall":
+	if id=="farm":
+		c.draw_rect(Rect2(-30,-28,60,58),Color("675e3c"))
+		for row in 5:
+			c.draw_line(Vector2(-26,-22+row*10),Vector2(26,-22+row*10),Color("967947"),3)
+			for column in 5:
+				var tip=Vector2(-20+column*10,-24+row*10)
+				c.draw_line(tip+Vector2(0,5),tip+Vector2(0,-3),Color("9bb473"),2)
+	elif id=="wall":
 		c.draw_rect(Rect2(-25,-11,50,32),Color("737b70"));c.draw_rect(Rect2(-25,-18,50,10),Color("a1a58d"))
 		for x in [-25,-5,15]:c.draw_rect(Rect2(x,-26,11,13),Color("a1a58d"))
 		for x in [-24,0,23]:c.draw_line(Vector2(x,-7),Vector2(x,19),Color("545e55"),1)
@@ -65,5 +72,7 @@ static func building(c:CanvasItem,p:Vector2,id:String,level:int,selected:bool=fa
 			c.draw_line(Vector2(-15,-23),Vector2(15,-3),Color("d9d4b1"),3)
 		elif id=="mine":
 			c.draw_rect(Rect2(-15,-8,30,32),Color("333e37"));c.draw_line(Vector2(-17,6),Vector2(17,-13),gold,4)
+		elif id=="house":
+			c.draw_rect(Rect2(13,-30,7,15),Color("746f5d"));c.draw_rect(Rect2(-18,13,9,9),Color("849567"))
 	for i in level:c.draw_rect(Rect2(-9+i*8,31,5,4),gold)
 	c.draw_set_transform(Vector2.ZERO)

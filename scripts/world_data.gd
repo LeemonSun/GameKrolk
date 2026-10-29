@@ -25,7 +25,7 @@ static func generate(seed_value:int)->Dictionary:
 			if int(source.x)==pos.x and int(source.y)==pos.y:source.amount=0
 		sources.append({"id":sources.size(),"x":pos.x,"y":pos.y,"kind":"stone" if pos==Vector2i(20,8) else "wood","amount":85})
 	var workers=[]
-	for i in 3:workers.append({"id":i,"x":16.0+i*0.5,"y":12.0,"job":"idle","source":-1,"carry":0,"carry_kind":"wood","progress":0.0})
+	for i in 3:workers.append({"id":i,"x":16.0+i*0.5,"y":14.5,"job":"idle","source":-1,"carry":0,"carry_kind":"wood","progress":0.0})
 	return {"seed":seed_value,"width":WIDTH,"height":HEIGHT,"tiles":tiles,"sources":sources,"workers":workers,"clock":0.0,"raid_in":150.0,"raids_defeated":0,"raid_active":false,"raid_number":0}
 
 static func valid(value:Variant)->bool:
@@ -52,7 +52,7 @@ static func valid(value:Variant)->bool:
 		for key in ["id","x","y","source","carry","progress"]:
 			if not number(w.get(key)):return false
 		if w.x<0 or w.x>=WIDTH or w.y<0 or w.y>=HEIGHT or w.carry<0 or w.carry>20 or w.progress<0 or w.progress>10:return false
-		if w.get("job") not in ["idle","wood","stone","manual"] or w.get("carry_kind") not in ["wood","stone"]:return false
+		if w.get("job") not in ["idle","wood","stone","manual","build","farm"] or w.get("carry_kind") not in ["wood","stone","food"]:return false
 	for key in ["clock","raid_in","raids_defeated","raid_number","seed"]:
 		if not number(value.get(key)):return false
 	if value.clock<0 or value.raid_in<0 or value.raid_in>10000:return false
@@ -63,11 +63,17 @@ static func valid(value:Variant)->bool:
 			if not number(combat.get(key)) or combat[key]<0:return false
 		if not combat.get("units") is Array or combat.units.is_empty() or combat.units.size()>2000:return false
 		if not combat.units[0] is Dictionary or combat.units[0].get("kind")!="hero":return false
+		var combat_ids={};var maximum_uid=-1
 		for u in combat.units:
 			if not u is Dictionary or u.get("kind") not in ["hero","militia","archer","guard"]:return false
 			for key in ["team","x","y","hp","max_hp","damage","speed","reach","cooldown","rank"]:
 				if not number(u.get(key)) or u[key]<0 or u[key]>10000000:return false
 			if int(u.team) not in [0,1] or float(u.team)!=int(u.team) or u.x>=WIDTH*TILE or u.y>=HEIGHT*TILE or u.hp>u.max_hp or u.max_hp<=0 or u.cooldown<=0:return false
+			if u.has("uid"):
+				if not number(u.uid) or u.uid<0 or float(u.uid)!=int(u.uid) or combat_ids.has(int(u.uid)):return false
+				combat_ids[int(u.uid)]=true;maximum_uid=maxi(maximum_uid,int(u.uid))
+		if combat.has("next_uid"):
+			if not number(combat.next_uid) or float(combat.next_uid)!=int(combat.next_uid) or combat.next_uid<=maximum_uid:return false
 	return value.get("raid_active") is bool
 
 static func number(v:Variant)->bool:return (v is int or v is float) and is_finite(float(v))

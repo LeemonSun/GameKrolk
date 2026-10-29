@@ -24,9 +24,10 @@ def main() -> int:
     (work / '.gdignore').touch()
     json.loads((ROOT / 'data/game.json').read_text(encoding='utf-8'))
     cases = [('import', ['--headless', '--editor', '--import'])]
-    cases += [(name, ['--headless', '--script', f'res://tests/{name}.gd']) for name in ['test_core', 'test_world', 'test_cycle']]
+    cases += [(name, ['--headless', '--script', f'res://tests/{name}.gd']) for name in ['test_core', 'test_world', 'test_settlement', 'test_cycle', 'test_soak']]
     if args.gui:
         cases.append(('test_world_ui', ['--script', 'res://tests/test_world_ui.gd']))
+        cases.append(('test_menu', ['--script', 'res://tests/test_menu.gd']))
     results = []
     for name, options in cases:
         command = [str(engine), '--path', str(ROOT), *options, '--log-file', str(work / f'{name}.log'), '--', '--test-mode']
@@ -39,7 +40,7 @@ def main() -> int:
             results.append({'case': name, 'passed': passed, 'exit_code': run.returncode, 'errors': errors})
             print(f'{name}: {"PASS" if passed else "FAIL"}')
             for line in output.splitlines():
-                if line.startswith(('CORE_TESTS', 'WORLD_TESTS', 'CYCLE_TESTS', 'WORLD_UI_READY')):
+                if line.startswith(('CORE_TESTS', 'WORLD_TESTS', 'SETTLEMENT_TESTS', 'CYCLE_TESTS', 'SOAK_TESTS', 'WORLD_UI_READY', 'MENU_TESTS')):
                     print(line)
             if not passed:
                 print(output[-6000:])

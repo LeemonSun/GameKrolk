@@ -1,14 +1,27 @@
 extends Control
 
 const State=preload("res://scripts/state.gd")
+const Settlement=preload("res://scripts/settlement.gd")
+const Profiles=preload("res://scripts/profiles.gd")
+const StartMenu=preload("res://scripts/start_menu.gd")
+var profiles
+var start_menu
+var session_started=false
+var combat_was_paused=false
+var live_labels={}
+var demolition_dialog:ConfirmationDialog
+var demolition_uid=-1
+var dialog_was_paused=false
+var selected_building_uid=-1
 const BaseView=preload("res://scripts/world_view.gd")
 const World=preload("res://scripts/world.gd")
 const BattleView=preload("res://scripts/battle_view.gd")
-const BG=Color("101b1c")
-const PANEL=Color("192827")
-const GOLD=Color("d6bc84")
-const INK=Color("e5e5cd")
-const MUTED=Color("a7b4a8")
+const Palette=preload("res://scripts/palette.gd")
+const BG=Palette.BG
+const PANEL=Palette.PANEL
+const ACCENT=Palette.ACCENT
+const INK=Palette.INK
+const MUTED=Palette.MUTED
 var state
 var world
 var base
@@ -38,12 +51,22 @@ var autosave_clock=0.0
 func _ready():
 	Engine.max_fps=60
 	var test_profile="user://progress.json"
-	if "--test-mode" in OS.get_cmdline_user_args():test_profile="res://work/test-session.json"
+	var test_mode="--test-mode" in OS.get_cmdline_user_args()
+	if test_mode:
+		test_profile="res://work/test-session-%d.json"%OS.get_process_id()
+		profiles=Profiles.new("res://work/profiles-%d"%OS.get_process_id(),test_profile)
+	else:
+		profiles=Profiles.new();test_profile=profiles.last_path()
 	state=State.new(test_profile);state.load_progress()
-	world=World.new(state);world.notice.connect(_notice);world.raid_finished.connect(func(_won):_refresh())
+	world=World.new(state);world.notice.connect(_notice);world.raid_finished.connect(func(_won):_refresh());world.settlement_changed.connect(func():call_deferred("_refresh"))
 	_setup_theme();_setup_ui();_refresh()
+	start_menu=StartMenu.new();add_child(start_menu)
+	start_menu.continue_requested.connect(_continue_profile);start_menu.new_requested.connect(_new_party)
+	start_menu.resume_requested.connect(_resume_game);start_menu.exit_requested.connect(_close)
+	if test_mode:session_started=true;start_menu.hide()
+	else:_open_main_menu()
 	if not state.warning.is_empty():_notice(state.warning,15)
-	print("GAMEKROLK_READY "+JSON.stringify({"version":"0.0.2","save":ProjectSettings.globalize_path(state.save_path),"renderer":RenderingServer.get_current_rendering_method()}))
+	print("GAMEKROLK_READY "+JSON.stringify({"version":"0.0.3","save":ProjectSettings.globalize_path(state.save_path),"renderer":RenderingServer.get_current_rendering_method()}))
 
 func _style(color:Color,border:Color=Color.TRANSPARENT,radius:int=10)->StyleBoxFlat:
 	var s=StyleBoxFlat.new();s.bg_color=color
@@ -52,20 +75,7 @@ func _style(color:Color,border:Color=Color.TRANSPARENT,radius:int=10)->StyleBoxF
 	return s
 
 func _setup_theme():
-	theme=Theme.new();theme.default_font_size=16
-	var font=SystemFont.new();font.font_names=PackedStringArray(["Segoe UI","Noto Sans"]);theme.default_font=font
-	theme.set_color("font_color","Label",INK)
-	theme.set_color("font_color","Button",INK);theme.set_color("font_hover_color","Button",Color.WHITE)
-	theme.set_color("font_disabled_color","Button",Color("6c7972"))
-	theme.set_stylebox("normal","Button",_style(Color("263a35"),Color("3a4e43"),7))
-	theme.set_stylebox("hover","Button",_style(Color("354a3b"),GOLD,7))
-	theme.set_stylebox("pressed","Button",_style(Color("4c5440"),GOLD,7))
-	theme.set_stylebox("focus","Button",_style(Color(0,0,0,0),GOLD,7))
-	theme.set_stylebox("disabled","Button",_style(Color("202d29"),Color("2d3930"),7))
-	theme.set_stylebox("panel","PanelContainer",_style(PANEL,Color("344238"),12))
-	theme.set_stylebox("panel","AcceptDialog",_style(PANEL,GOLD,10))
-	theme.set_constant("separation","VBoxContainer",9)
-	theme.set_constant("separation","HBoxContainer",10)
+	theme=Palette.make()
 
 func _label(text:String,size_px:int=16,color:Color=INK)->Label:
 	var label=Label.new();label.text=text;label.add_theme_font_size_override("font_size",size_px);label.add_theme_color_override("font_color",color)
@@ -75,7 +85,7 @@ func _label(text:String,size_px:int=16,color:Color=INK)->Label:
 func _button(text:String,callback:Callable=Callable(),accent:bool=false)->Button:
 	var b=Button.new();b.text=text;b.custom_minimum_size.y=42;b.mouse_default_cursor_shape=Control.CURSOR_POINTING_HAND
 	if callback.is_valid():b.pressed.connect(callback)
-	if accent:b.add_theme_stylebox_override("normal",_style(Color("746143"),Color("d6bc84"),7))
+	if accent:Palette.button_accent(b)
 	return b
 
 func _setup_ui():
@@ -86,9 +96,10 @@ func _setup_ui():
 	add_child(margin);root=VBoxContainer.new();root.add_theme_constant_override("separation",13);margin.add_child(root)
 	var header=HBoxContainer.new();root.add_child(header)
 	var brand=VBoxContainer.new();brand.size_flags_horizontal=Control.SIZE_EXPAND_FILL;brand.add_theme_constant_override("separation",1);header.add_child(brand)
-	title=_label("КРОЛИК  /  ЦИТАДЕЛЬ",29,GOLD);brand.add_child(title)
-	subtitle=_label("ЖИВОЙ УЧАСТОК    ·    технический прототип 0.0.2    ·    графика временная",12,MUTED);brand.add_child(subtitle)
+	title=_label("КРОЛИК  /  ЦИТАДЕЛЬ",29,ACCENT);brand.add_child(title)
+	subtitle=_label("ЖИВОЙ УЧАСТОК    ·    технический прототип 0.0.3    ·    графика временная",12,MUTED);brand.add_child(subtitle)
 	header.add_child(_button("Сохранить",func():_notice("Прогресс сохранён." if state.save_progress() else state.warning)))
+	header.add_child(_button("Меню",_open_main_menu))
 	header.add_child(_button("Во весь экран  F11",_fullscreen))
 	var resource_panel=PanelContainer.new();root.add_child(resource_panel);resources=_label("",17,INK);resource_panel.add_child(resources)
 	toolbar=HBoxContainer.new();root.add_child(toolbar)
@@ -100,21 +111,25 @@ func _setup_ui():
 	var side=PanelContainer.new();side.custom_minimum_size.x=340;content.add_child(side)
 	var scroll=ScrollContainer.new();scroll.horizontal_scroll_mode=ScrollContainer.SCROLL_MODE_DISABLED;side.add_child(scroll)
 	sidebar=VBoxContainer.new();sidebar.size_flags_horizontal=Control.SIZE_EXPAND_FILL;sidebar.custom_minimum_size.x=300;sidebar.add_theme_constant_override("separation",10);scroll.add_child(sidebar)
-	toast=_label("Начните с крепости или испытайте героя на полигоне. Наведите курсор на кнопки для подсказок.",14,MUTED)
+	toast=_label("Начните с рубежей поселения: наладьте древесину, еду и жильё. Людям можно назначать работу.",14,MUTED)
 	toast.custom_minimum_size.y=42;root.add_child(toast)
 	result_dialog=AcceptDialog.new();result_dialog.title="Итог сражения";result_dialog.ok_button_text="Вернуться в крепость";result_dialog.confirmed.connect(_return_base);result_dialog.canceled.connect(_return_base);add_child(result_dialog)
 	retreat_dialog=ConfirmationDialog.new();retreat_dialog.title="Отступить?";retreat_dialog.dialog_text="Осада будет засчитана как поражение. Выжившие вернутся; потраченный провиант не возвращается."
 	retreat_dialog.ok_button_text="Отступить";retreat_dialog.cancel_button_text="Остаться";retreat_dialog.confirmed.connect(_retreat);add_child(retreat_dialog)
+	demolition_dialog=ConfirmationDialog.new();demolition_dialog.title="Снести постройку?"
+	demolition_dialog.ok_button_text="Снести";demolition_dialog.cancel_button_text="Отмена";demolition_dialog.confirmed.connect(_demolish);add_child(demolition_dialog)
+	demolition_dialog.canceled.connect(func():world.paused=dialog_was_paused;_refresh())
 	get_window().close_requested.connect(_close)
 
 func _clear(box:Node):
 	for child in box.get_children():box.remove_child(child);child.queue_free()
 
 func _refresh():
-	_update_resources();_clear(toolbar);_clear(sidebar)
+	_resolve_selected()
+	_update_resources();live_labels.clear();_clear(toolbar);_clear(sidebar)
 	if in_battle:_battle_ui();return
 	if not state.data.world.raid_active:world.sync_army()
-	for entry in [["build","Поселение"],["heroes","Герои"],["army","Армия"],["officers","Должности"],["tech","Технологии"]]:
+	for entry in [["build","Строить"],["people","Люди"],["goals","Рубежи"],["heroes","Герои"],["army","Армия"],["officers","Должности"],["tech","Технологии"]]:
 		var b=_button(entry[1],_set_tab.bind(entry[0]),tab==entry[0]);toolbar.add_child(b)
 	var spacer=Control.new();spacer.size_flags_horizontal=Control.SIZE_EXPAND_FILL;toolbar.add_child(spacer)
 	toolbar.add_child(_button("Продолжить" if world.paused else "Пауза  P",_pause_world))
@@ -122,6 +137,8 @@ func _refresh():
 	toolbar.add_child(_button("Проверить набег",_trigger_raid,true))
 	match tab:
 		"build":_build_ui()
+		"people":_people_ui()
+		"goals":_goals_ui()
 		"heroes":_heroes_ui()
 		"army":_army_ui()
 		"officers":_officers_ui()
@@ -135,51 +152,61 @@ func _update_resources():
 	var raid="НАБЕГ!" if state.data.world.raid_active else "НАБЕГ ЧЕРЕЗ %02d:%02d"%[int(state.data.world.raid_in)/60,int(state.data.world.raid_in)%60]
 	resources.text="МОНЕТЫ %d    ДРЕВЕСИНА %d    КАМЕНЬ %d    ПРОВИАНТ %d    АРМИЯ %d/%d    %s"%[state.data.coins,state.data.wood,state.data.stone,state.data.food,state.army_count(),state.capacity(),raid]
 
-func _heading(text:String):sidebar.add_child(_label(text,21,GOLD))
+func _heading(text:String):sidebar.add_child(_label(text,21,ACCENT))
 func _hint(text:String):sidebar.add_child(_label(text,14,MUTED))
 func _line():sidebar.add_child(HSeparator.new())
 
 func _build_ui():
-	_heading("Ваш участок мира")
-	_hint("Три рабочих добывают ресурсы и несут груз в Штаб. Нажмите на дерево или камень для ручного поручения.")
+	_heading("Постройки поселения")
 	if selected_source>=0:
 		var source=world._source(selected_source)
 		if not source.is_empty():
-			sidebar.add_child(_label(("Дерево" if source.kind=="wood" else "Месторождение")+" · осталось "+str(int(source.amount)),18,GOLD))
-			sidebar.add_child(_button("Направить свободного рабочего",_gather_selected,true));_line()
-	for id in ["hq","barracks","wall","forge","lab","lumber","mine"]:
-		var def=state.catalog.building(id)
-		var b=_button("%s · %d / %d / %d"%[def.name,def.coins,def.wood,def.stone],_place.bind(id),placement==id)
-		b.disabled=def.has("tech") and not state.data.research.get(def.tech,false)
-		b.tooltip_text=def.hint;sidebar.add_child(b)
-	_line()
+			sidebar.add_child(_label(("Дерево" if source.kind=="wood" else "Месторождение")+" · осталось "+str(int(source.amount)),18,ACCENT))
+			sidebar.add_child(_button("Добывать до исчерпания",_gather_selected,true));_line()
 	if selected_building>=0 and selected_building<state.data.buildings.size():
 		var building=state.data.buildings[selected_building];var def=state.catalog.building(building.id)
-		_heading("%s · уровень %d"%[def.name,building.level]);_hint(def.hint)
-		if building.level<def.max_level:
+		_heading("%s · %s"%[def.name,"уровень "+str(building.level) if building.built else "стройка"])
+		_hint(def.hint)
+		var progress=_label("",14,ACCENT);live_labels["building_progress"]=progress;sidebar.add_child(progress)
+		if building.built and building.target_level==building.level and building.level<def.max_level:
 			sidebar.add_child(_button("Улучшить · %d / %d / %d"%[def.coins*building.level,def.wood*building.level,def.stone*building.level],_upgrade,true))
-		else:_hint("Достигнут предел уровня прототипа.")
-	else:_hint("Нажмите на существующее здание, чтобы узнать его эффект и улучшить.")
-	_line();_hint("Цена: монеты / древесина / камень. Лесопилка и шахта открываются во вкладке технологий. Колесо мыши приближает участок.")
+		if building.id!="hq":sidebar.add_child(_button("Убрать постройку…",_ask_demolish))
+		_line()
+	elif placement.is_empty():_hint("Выберите здание на карте для улучшения. Новую стройку выполняет рабочий; размеры видны под курсором.")
+	if not placement.is_empty():_hint("Размещаете: "+state.catalog.building(placement).name+". ЛКМ — заложить, Esc — отменить.")
+	var grid=GridContainer.new();grid.columns=2;sidebar.add_child(grid)
+	for id in ["wall","house","lumber","mine","farm","barracks","forge","lab","hq"]:
+		var def=state.catalog.building(id)
+		var button=_button("%s\n%d / %d / %d"%[def.name,def.coins,def.wood,def.stone],_place.bind(id),placement==id)
+		button.custom_minimum_size.y=62;button.size_flags_horizontal=Control.SIZE_EXPAND_FILL
+		button.disabled=def.has("tech") and not state.data.research.get(def.tech,false)
+		button.tooltip_text=def.hint+"\nРазмер: %d×%d. Стройка: %d секунд работы."%[def.width,def.height,def.work];grid.add_child(button)
+	_line();_hint("Цена: монеты / древесина / камень. Лес, шахты и фермы требуют технологий и рабочих. Рабочее место обслуживает один человек.")
 	sidebar.add_child(_button("Ремонт Штаба · 20 дерева / 10 камня",func():_notice(world.repair());_refresh()))
+	_update_live()
 
 func _place(id:String):
-	placement=id;selected_building=-1;selected_source=-1;_notice("Выберите свободную клетку для: "+state.catalog.building(id).name);_refresh()
+	placement=id;selected_building=-1;selected_building_uid=-1;selected_source=-1;_notice("Выберите свободную клетку для: "+state.catalog.building(id).name);_refresh()
 
 func _base_click(cell:Vector2i):
 	if in_battle:return
-	for i in state.data.buildings.size():
-		var building=state.data.buildings[i]
-		if int(building.x)==cell.x and int(building.y)==cell.y:
-			selected_building=i;selected_source=-1;placement="";_refresh();return
+	var index=state.building_at(cell)
+	if index>=0:
+		selected_building=index;selected_building_uid=int(state.data.buildings[index].uid);selected_source=-1;placement="";_refresh();return
 	if placement.is_empty():
-		selected_building=-1
+		selected_building=-1;selected_building_uid=-1
 		var source=world.source_at(cell);selected_source=int(source.id) if not source.is_empty() else -1
 		_refresh();return
-	if world.occupied(cell):_notice("Клетка занята человеком. Отведите бойцов или дождитесь рабочего.");return
-	_notice(state.build(placement,cell));world.rebuild_navigation();_refresh()
+	var def=state.catalog.building(placement)
+	for x in range(cell.x,cell.x+int(def.width)):
+		for y in range(cell.y,cell.y+int(def.height)):
+			if world.occupied(Vector2i(x,y)):_notice("Площадка занята людьми. Отведите бойцов или дождитесь рабочего.");return
+	var result=state.build(placement,cell);_notice(result)
+	if result.begins_with("Заложено"):
+		selected_building=state.data.buildings.size()-1;selected_building_uid=int(state.data.buildings[-1].uid);placement="";world.rebuild_navigation();world._assign_jobs();state.save_progress()
+	_refresh()
 
-func _upgrade():_notice(state.upgrade(selected_building));_refresh()
+func _upgrade():_resolve_selected();_notice(state.upgrade(selected_building));_refresh()
 
 func _gather_selected():_notice(world.gather(selected_source));_refresh()
 
@@ -188,10 +215,10 @@ func _tech_ui():
 	_hint("Технологии открывают постоянное производство. Рабочие физически идут к источнику и возвращают груз.")
 	for id in state.catalog.data.technologies:
 		var def=state.catalog.data.technologies[id]
-		sidebar.add_child(_label(def.name,19,GOLD));_hint(def.hint)
+		sidebar.add_child(_label(def.name,19,ACCENT));_hint(def.hint)
 		var b=_button("Изучено" if state.data.research[id] else "Изучить · %d / %d / %d"%[def.coins,def.wood,def.stone],_research.bind(id),true)
 		b.disabled=state.data.research[id];sidebar.add_child(b);_line()
-	_hint("Числа цены: монеты / древесина / камень. В этой основе два открытия; большая технологическая цепочка ещё предстоит.")
+	_hint("Числа цены: монеты / древесина / камень. Первые три открытия; большая технологическая цепочка ещё предстоит.")
 
 func _research(id:String):_notice(state.research(id));_refresh()
 func _pause_world():world.paused=not world.paused;_refresh()
@@ -219,7 +246,7 @@ func _select_hero(id:String):
 
 func _army_ui():
 	_heading("Соберите свой полк")
-	_hint("Бойцы участвуют в осаде. Потери учитываются при возвращении; полигон не расходует армию.")
+	_hint("Бойцы защищают этот участок от набегов. Потери сохраняются; полигон служит отдельной тренировкой.")
 	for id in ["militia","archer","guard"]:
 		var def=state.catalog.troop(id)
 		sidebar.add_child(_label("%s  ·  %d в строю"%[def.name,state.data.army[id]],18))
@@ -238,7 +265,7 @@ func _officers_ui():
 	_hint("Первые две должности проверяют делегирование. Это пока функциональные назначения без отдельных биографий слуг.")
 	for id in ["commander","quartermaster"]:
 		var assigned=bool(state.data.officers[id]);var command=id=="commander"
-		sidebar.add_child(_label("Командующий" if command else "Снабженец",19,GOLD))
+		sidebar.add_child(_label("Командующий" if command else "Снабженец",19,ACCENT))
 		_hint("После осады пополняет мечников до 12, пока есть монеты и места." if command else "После осады покупает провиант до запаса 12. Цена: 4 монеты за единицу.")
 		var b=_button("Освободить должность" if assigned else "Назначить",_assign.bind(id));b.disabled=not command and state.level("hq")<2;sidebar.add_child(b)
 		if b.disabled:_hint("Вторая должность откроется на уровне Штаба II.")
@@ -246,7 +273,7 @@ func _officers_ui():
 		toggle.toggled.connect(_toggle_auto.bind("auto_recruit" if command else "auto_supply"));sidebar.add_child(toggle);_line()
 	sidebar.add_child(_button("Купить 3 провианта · 12 монет",_buy_food))
 	sidebar.add_child(_button("Выполнить поручения сейчас",_run_automation))
-	_hint("Уже есть нужный запас — расхода не будет. Еда пока используется только при отправке в осаду.")
+	_hint("Уже есть нужный запас — расхода не будет. Еда расходуется населением и армией каждую игровую минуту.")
 
 func _assign(id:String):_notice(state.assign(id));_refresh()
 func _toggle_auto(enabled:bool,key:String):state.data[key]=enabled;state.save_progress()
@@ -282,7 +309,7 @@ func _battle_ui():
 	toolbar.add_child(_button("Продолжить" if combat.paused else "Пауза  P",_pause))
 	toolbar.add_child(_button("Скорость ×1" if combat.speed==1 else "Скорость ×2",_speed))
 	var spacer=Control.new();spacer.size_flags_horizontal=Control.SIZE_EXPAND_FILL;toolbar.add_child(spacer)
-	toolbar.add_child(_label("ПОЛИГОН · без расхода ресурсов" if benchmark_mode else "ОСАДА · защитите крепость",15,GOLD))
+	toolbar.add_child(_label("ПОЛИГОН · без расхода ресурсов" if benchmark_mode else "ОСАДА · защитите крепость",15,ACCENT))
 	_heading(state.catalog.hero(state.data.selected_hero).name)
 	battle_stats=_label("",16,INK);sidebar.add_child(battle_stats)
 	skill_button=_button("",combat.cast,true);sidebar.add_child(skill_button)
@@ -338,9 +365,10 @@ func _return_base():
 
 func _notice(text:String,duration:float=6.0):
 	if toast==null:return
-	toast.text=text;toast_time=duration;toast.add_theme_color_override("font_color",GOLD)
+	toast.text=text;toast_time=duration;toast.add_theme_color_override("font_color",ACCENT)
 
 func _process(dt):
+	if start_menu!=null and start_menu.visible:return
 	if world!=null and not in_battle:
 		world.step(dt);autosave_clock+=dt
 		if autosave_clock>20:autosave_clock=0;state.save_progress()
@@ -348,11 +376,14 @@ func _process(dt):
 		toast_time-=dt
 		if toast_time<=0:toast.add_theme_color_override("font_color",MUTED)
 	ui_clock+=dt
-	if ui_clock>0.2:ui_clock=0;_update_battle_ui();_update_resources()
+	if ui_clock>0.2:ui_clock=0;_update_battle_ui();_update_resources();_update_live()
 
 func _unhandled_key_input(event):
 	if not event is InputEventKey or not event.pressed or event.echo:return
 	if event.keycode==KEY_F11:_fullscreen();get_viewport().set_input_as_handled();return
+	if start_menu!=null and start_menu.visible:
+		if event.keycode==KEY_ESCAPE:_resume_game();get_viewport().set_input_as_handled()
+		return
 	if in_battle and not result_dialog.visible:
 		match event.keycode:
 			KEY_SPACE:combat.cast()
@@ -366,7 +397,9 @@ func _unhandled_key_input(event):
 		get_viewport().set_input_as_handled()
 	elif not in_battle:
 		match event.keycode:
-			KEY_ESCAPE:placement="";_refresh()
+			KEY_ESCAPE:
+				if placement.is_empty():_open_main_menu()
+				else:placement="";_refresh()
 			KEY_P:_pause_world()
 			KEY_SPACE:_notice("Снимите паузу для применения техники." if world.paused else world.battle.skill())
 			KEY_1:base.command_group="all";_notice("Приказ получат все бойцы.")
@@ -379,5 +412,113 @@ func _fullscreen():
 	var window=get_window();window.mode=Window.MODE_WINDOWED if window.mode==Window.MODE_FULLSCREEN else Window.MODE_FULLSCREEN
 
 func _close():
-	if not in_battle:state.save_progress()
+	if session_started and not in_battle:state.save_progress()
 	get_tree().quit()
+
+func _people_ui():
+	_heading("Люди поселения")
+	_hint("Рабочие %d / мест %d. Еда: %d в игровую минуту. В походном полигоне поселение стоит на паузе."%[state.data.world.workers.size(),state.worker_capacity(),world.food_need()])
+	var food=_label("",14,ACCENT);live_labels["food"]=food;sidebar.add_child(food)
+	var hire=_button("Нанять рабочего · 40 монет / 4 еды",_hire_worker,true)
+	hire.disabled=state.data.world.workers.size()>=state.worker_capacity();sidebar.add_child(hire)
+	if hire.disabled:_hint("Чтобы пригласить следующего человека, достройте жилой дом.")
+	var priority=CheckButton.new();priority.text="Стройка важнее производства";priority.button_pressed=state.data.construction_first
+	priority.tooltip_text="Автоматический рабочий вернёт груз и возьмётся за стройку. Ручные поручения и выбранные профессии сохраняются."
+	priority.toggled.connect(func(value):world.set_priority(value));sidebar.add_child(priority)
+	_line()
+	for worker in state.data.world.workers:
+		sidebar.add_child(_label(worker.name,18,ACCENT))
+		var status=_label("",14,MUTED);live_labels["worker_"+str(int(worker.id))]=status;sidebar.add_child(status)
+		var choice=OptionButton.new();choice.custom_minimum_size.y=36
+		for text in ["Авто: работа по приоритету","Строитель","Дровосек: нужна лесопилка","Шахтёр: нужна шахта","Фермер: нужна ферма","Отдых"]:
+			choice.add_item(text)
+		choice.select(Settlement.PREFERENCES.find(worker.preference));choice.item_selected.connect(_worker_choice.bind(int(worker.id)));sidebar.add_child(choice);_line()
+	_hint("При смене работы груз сначала возвращается в Штаб. Выбранный источник добывается до конца; отдых отменяет поручение.")
+	_update_live()
+
+func _worker_choice(index:int,id:int):
+	_notice(world.set_preference(id,Settlement.PREFERENCES[index]));_update_live()
+
+func _hire_worker():
+	_notice(state.hire_worker());world._relocate_blocked();world._assign_jobs();state.save_progress();_refresh()
+
+func _goals_ui():
+	_heading("Рубежи поселения")
+	_hint("Это задачи обучающего среза, а не сюжетная кампания. Каждый рубеж даёт награду один раз.")
+	for goal in Settlement.GOALS:
+		var done=goal.id in state.data.achieved
+		sidebar.add_child(_label(("✓ " if done else "○ ")+goal.title,19,ACCENT if not done else MUTED))
+		_hint(goal.hint)
+		_hint("Получено: %d монет."%goal.reward if done else "Награда: %d монет."%goal.reward);_line()
+	_hint("Монеты также приходят за отражённые набеги. Потери армии остаются, а поселение продолжает работать между нападениями.")
+
+func _ask_demolish():
+	if selected_building<0 or selected_building>=state.data.buildings.size():return
+	var b=state.data.buildings[selected_building];demolition_uid=int(b.uid)
+	dialog_was_paused=world.paused;world.paused=true
+	demolition_dialog.dialog_text="Убрать «%s»? Вернётся %d древесины и %d камня. Монеты не возвращаются."%[state.catalog.building(b.id).name,int(b.paid_wood)/2,int(b.paid_stone)/2]
+	demolition_dialog.popup_centered(Vector2i(460,220))
+
+func _demolish():
+	world.paused=dialog_was_paused
+	for i in state.data.buildings.size():
+		if int(state.data.buildings[i].uid)==demolition_uid:
+			_notice(state.demolish(i));selected_building=-1;selected_building_uid=-1;world.rebuild_navigation();world._assign_jobs();state.save_progress();_refresh();return
+	_notice("Постройка уже отсутствует.")
+
+func _resolve_selected():
+	if selected_building_uid<0:return
+	selected_building=-1
+	for i in state.data.buildings.size():
+		if int(state.data.buildings[i].uid)==selected_building_uid:selected_building=i;return
+	selected_building_uid=-1
+
+func _update_live():
+	if in_battle:return
+	for worker in state.data.world.workers:
+		var key="worker_"+str(int(worker.id))
+		if live_labels.has(key):live_labels[key].text=world.worker_status(int(worker.id))
+	if live_labels.has("food"):
+		live_labels.food.text="Еды нет — скорость работы 60%." if state.data.food==0 else "Запас еды: %d. Следующая трапеза через %d с."%[state.data.food,ceili(60-state.data.world.food_clock)]
+	if live_labels.has("building_progress") and selected_building>=0 and selected_building<state.data.buildings.size():
+		var building=state.data.buildings[selected_building]
+		live_labels.building_progress.text="Работа: %d%% · к уровню %d"%[mini(100,roundi(building.work_done/world.required_work(building)*100)),building.target_level] if world.needs_work(building) else "Построено · прочность %d / %d"%[building.hp,state.catalog.building(building.id).hp*building.level]
+		if building.id=="hq":live_labels.building_progress.text+="\nШтаб: %d / %d"%[world.battle.keep_hp,world.battle.keep_max]
+
+func _open_main_menu():
+	if start_menu==null:return
+	var save_error=""
+	if session_started and not state.save_progress():save_error=state.warning if not state.warning.is_empty() else "Не удалось сохранить текущую партию."
+	combat_was_paused=combat.paused;combat.paused=true
+	start_menu.open(profiles.entries(),state.save_path,session_started)
+	if not save_error.is_empty():start_menu.show_error(save_error)
+
+func _resume_game():
+	if not session_started:return
+	start_menu.hide();combat.paused=combat_was_paused
+
+func _continue_profile(path:String):
+	if session_started and path==state.save_path:_resume_game();return
+	if path not in profiles.paths():start_menu.show_error("Сохранение больше не найдено.");return
+	var next=State.new(path)
+	if not next.load_progress() or next.read_only:start_menu.show_error(next.warning);return
+	_activate_party(next)
+
+func _new_party(seed_value:int,threat:String,title_text:String):
+	var next=profiles.create(seed_value,threat,title_text)
+	if next==null:start_menu.show_error(profiles.error);return
+	_activate_party(next)
+
+func _activate_party(next):
+	state.before_save=Callable()
+	for connection in base.order_requested.get_connections():base.order_requested.disconnect(connection.callable)
+	state=next;world=World.new(state);base.state=state;base.world=world;base.order_requested.connect(world.order)
+	world.notice.connect(_notice);world.raid_finished.connect(func(_won):_refresh());world.settlement_changed.connect(func():call_deferred("_refresh"))
+	combat.running=false;combat.hide();base.show();result_dialog.hide();retreat_dialog.hide()
+	in_battle=false;benchmark_mode=false;session_started=true;autosave_clock=0;tab="build"
+	selected_building=-1;selected_building_uid=-1;selected_source=-1;placement="";base.zoom=1.0;base.pan=Vector2.ZERO
+	start_menu.hide();_refresh()
+	if state.save_progress():
+		if not profiles.remember(state.save_path):_notice("Партия сохранена, но последнюю выбранную партию запомнить не удалось.")
+	else:_notice(state.warning)
+	if not state.warning.is_empty():_notice(state.warning)

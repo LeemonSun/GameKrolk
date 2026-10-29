@@ -4,6 +4,7 @@ signal cell_clicked(cell:Vector2i)
 signal order_requested(group:String,pos:Vector2)
 const Art=preload("res://scripts/art.gd")
 const WorldData=preload("res://scripts/world_data.gd")
+const Settlement=preload("res://scripts/settlement.gd")
 var state
 var world
 var selected=-1
@@ -74,11 +75,24 @@ func _draw():
 		if int(source.id)==selected_source:draw_rect(Rect2(rect.position+Vector2(source.x,source.y)*cell,Vector2.ONE*cell),Color("e0bf7e"),false,2)
 	for i in state.data.buildings.size():
 		var b=state.data.buildings[i]
-		Art.building(self,rect.position+(Vector2(b.x,b.y)+Vector2.ONE*0.5)*cell,b.id,int(b.level),i==selected,cell/55.0)
+		var area=Rect2(rect.position+Vector2(b.x,b.y)*cell,Vector2(b.width,b.height)*cell)
+		var center=area.get_center()
+		if b.built:Art.building(self,center,b.id,int(b.level),false,minf(area.size.x,area.size.y)/70.0)
+		else:
+			draw_rect(area.grow(-2),Color("514c37"));draw_rect(area.grow(-2),Color("bd9d65"),false,2)
+			draw_line(area.position+Vector2(4,4),area.end-Vector2(4,4),Color("9c8255"),3*factor)
+			draw_line(area.position+Vector2(area.size.x-4,4),area.position+Vector2(4,area.size.y-4),Color("9c8255"),3*factor)
+		if i==selected:draw_rect(area.grow(-1),Color("e0bf7e"),false,2)
+		if world!=null and world.needs_work(b):
+			draw_rect(Rect2(area.position+Vector2(2,area.size.y-6),Vector2(area.size.x-4,4)),Color("28342b"))
+			draw_rect(Rect2(area.position+Vector2(2,area.size.y-6),Vector2((area.size.x-4)*b.work_done/world.required_work(b),4)),Color("d0bd84"))
+		elif b.hp<state.catalog.building(b.id).hp*b.level:
+			var ratio=float(b.hp)/(state.catalog.building(b.id).hp*b.level)
+			draw_rect(Rect2(area.position+Vector2(2,area.size.y-6),Vector2((area.size.x-4)*ratio,4)),Color("cb8d70"))
 	for w in state.data.world.workers:
 		var p=rect.position+Vector2(w.x,w.y)*cell
 		Art.person(self,p,"militia",0,clock*8 if w.job!="idle" else 0,Vector2.RIGHT,0,0,Color.WHITE,false,factor*0.85)
-		if w.carry>0:draw_rect(Rect2(p+Vector2(4,-13)*factor,Vector2(6,7)*factor),Color("bd9c63") if w.carry_kind=="wood" else Color("acb9ad"))
+		if w.carry>0:draw_rect(Rect2(p+Vector2(4,-13)*factor,Vector2(6,7)*factor),Color("bd9c63") if w.carry_kind=="wood" else (Color("a7c57b") if w.carry_kind=="food" else Color("acb9ad")))
 	if world!=null:
 		for trace in world.battle.traces:draw_line(rect.position+trace.a*factor,rect.position+trace.b*factor,Color(0.96,0.6,0.64,0.25),maxf(1,factor*2))
 		var ordered=world.battle.units.duplicate();ordered.sort_custom(func(a,b):return a.pos.y<b.pos.y)
@@ -103,5 +117,15 @@ func _draw():
 		draw_rect(Rect2(h+Vector2(-18,-35)*factor,Vector2(36,4)*factor),Color("24342b"))
 		draw_rect(Rect2(h+Vector2(-18,-35)*factor,Vector2(36*hp,4)*factor),Color("c8b77b"))
 	if hover.x>=0 and hover.x<WorldData.WIDTH and hover.y>=0 and hover.y<WorldData.HEIGHT:
-		draw_rect(Rect2(rect.position+Vector2(hover)*cell,Vector2.ONE*cell),Color(0.9,0.8,0.5,0.16))
+		if placement.is_empty():draw_rect(Rect2(rect.position+Vector2(hover)*cell,Vector2.ONE*cell),Color(0.9,0.8,0.5,0.16))
+		else:
+			var def=state.catalog.building(placement);var reason=state.can_build(placement,hover)
+			for x in range(hover.x,hover.x+int(def.width)):
+				for y in range(hover.y,hover.y+int(def.height)):
+					if world.occupied(Vector2i(x,y)):reason="Площадка занята людьми."
+			var area=Rect2(rect.position+Vector2(hover)*cell,Vector2(def.width,def.height)*cell)
+			var color=Color("b4ce88") if reason.is_empty() else Color("d3806b")
+			draw_rect(area,Color(color,0.25));draw_rect(area,color,false,2)
+			var hint="ЛКМ — заложить · "+str(int(def.width))+"×"+str(int(def.height)) if reason.is_empty() else reason
+			draw_string(ThemeDB.fallback_font,Vector2(18,28),hint,HORIZONTAL_ALIGNMENT_LEFT,size.x-30,14,color)
 	draw_string(ThemeDB.fallback_font,Vector2(18,size.y-16),"Колесо — масштаб · средняя кнопка — камера · ПКМ — приказ · P — пауза · Пробел — техника",HORIZONTAL_ALIGNMENT_LEFT,-1,12,Color("c1c9b2"))

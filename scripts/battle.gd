@@ -32,9 +32,12 @@ var skill_casts=0
 var attacks_resolved=0
 var keep_position=Vector2(83,300)
 var walkable=Callable()
+var line_clear=Callable()
+var next_uid=0
 
 func start(config:Dictionary):
 	units.clear();projectiles.clear();effects.clear();events.clear();grid.clear();traces.clear()
+	next_uid=0
 	time=0;tick=0;hero_cooldown=0;finished=false;won=false;kills=0;buff_until=0;skill_casts=0;attacks_resolved=0;trace_timer=0
 	rng.seed=int(config.get("seed",20261029))
 	mode=config.get("mode","siege");hero_kind=config.get("hero","astreya");rank=int(config.get("rank",1));forge=int(config.get("forge",0))
@@ -74,11 +77,12 @@ func start(config:Dictionary):
 	_rebuild_grid()
 
 func _add_unit(kind:String,team:int,pos:Vector2,def:Dictionary):
-	var u={"id":units.size(),"kind":kind,"team":team,"pos":pos,"prev":pos,"home":pos,"hp":float(def.hp),"max_hp":float(def.hp),
+	var u={"id":units.size(),"uid":next_uid,"kind":kind,"team":team,"pos":pos,"prev":pos,"home":pos,"hp":float(def.hp),"max_hp":float(def.hp),
 		"damage":float(def.damage)*(1.0+forge*0.07 if team==0 else 1.0),"speed":float(def.speed),"reach":float(def.reach),"cooldown":float(def.cooldown),
 		"rank":int(def.get("rank",1)),"timer":rng.randf_range(0,0.5),"target":-1,"attack_target":-1,"windup":0.0,"attack_left":0.0,
 		"facing":Vector2.RIGHT if team==0 else Vector2.LEFT,"goal":Vector2.INF,"goal_until":0.0,"moving":false,"flash":0.0,"died":-1.0,"poison":0.0,"path":[]}
 	units.append(u)
+	next_uid+=1
 
 func _cell(pos:Vector2)->Vector2i:return Vector2i(floori(pos.x/CELL),floori(pos.y/CELL))
 
@@ -173,7 +177,7 @@ func step(dt:float):
 		var commanded=u.goal!=Vector2.INF and time<u.goal_until
 		if commanded and u.pos.distance_to(u.goal)<9:
 			u.home=u.goal;u.goal=Vector2.INF;commanded=false
-		if target!=null and dist<=u.reach:
+		if target!=null and dist<=u.reach and (not line_clear.is_valid() or line_clear.call(u.pos,target.pos)):
 			u.facing=(target.pos-u.pos).normalized()
 			if u.timer<=0:
 				u.attack_target=target.id;u.windup=0.17 if u.reach<60 else 0.25;u.attack_left=u.windup;u.timer=u.cooldown
@@ -183,7 +187,7 @@ func step(dt:float):
 		elif target!=null:movement=(target.pos-u.pos).normalized()
 		elif u.team==1:
 			var keep=keep_position
-			if u.pos.distance_to(keep)<45:
+			if u.pos.distance_to(keep)<45 and (not line_clear.is_valid() or line_clear.call(u.pos,keep)):
 				if u.timer<=0:
 					keep_hp=maxf(0,keep_hp-u.damage);u.timer=u.cooldown
 					if effects.size()<160:effects.append({"type":"hit","pos":keep+Vector2(20,rng.randf_range(-25,25)),"age":0.0,"life":0.25,"radius":10.0,"color":Color("edac76")})
@@ -197,6 +201,8 @@ func step(dt:float):
 			movement=(movement+separation*0.9).normalized()
 			var destination=(u.pos+movement*u.speed*dt).clamp(Vector2(18,18) if mode=="world" else Vector2(60,30),SIZE-Vector2(18,18) if mode=="world" else SIZE-Vector2(25,30))
 			if not walkable.is_valid() or walkable.call(destination):u.pos=destination
+			elif walkable.call(Vector2(destination.x,u.pos.y)):u.pos.x=destination.x
+			elif walkable.call(Vector2(u.pos.x,destination.y)):u.pos.y=destination.y
 			u.facing=movement;u.moving=u.pos.distance_squared_to(u.prev)>0.01
 	_update_projectiles(dt)
 	trace_timer+=dt
@@ -219,6 +225,7 @@ func _resolve_attack(u:Dictionary):
 	if u.hp<=0 or id<0 or id>=units.size() or units[id].hp<=0:return
 	var target=units[id]
 	if u.pos.distance_to(target.pos)>u.reach+14:return
+	if line_clear.is_valid() and not line_clear.call(u.pos,target.pos):return
 	attacks_resolved+=1
 	if u.reach>60:
 		var destination=target.pos
@@ -250,6 +257,7 @@ func _update_projectiles(dt:float):
 		var p=projectiles[i];p.life-=dt
 		var old:Vector2=p.pos
 		p.pos=old.move_toward(p.to,360*dt)
+		if line_clear.is_valid() and not line_clear.call(old,p.pos):projectiles.remove_at(i);continue
 		var target=units[p.target]
 		var nearest=Geometry2D.get_closest_point_to_segment(target.pos,old,p.pos)
 		var struck=target.hp>0 and nearest.distance_to(target.pos)<12

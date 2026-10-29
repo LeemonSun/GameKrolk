@@ -1,5 +1,5 @@
 {
-  "version": "0.0.2",
+  "version": "0.0.3",
   "buildings": {
     "hq": {
       "name": "Штаб",
@@ -7,7 +7,11 @@
       "coins": 70,
       "max_level": 3,
       "wood": 45,
-      "stone": 20
+      "stone": 20,
+      "width": 2,
+      "height": 2,
+      "work": 14,
+      "hp": 240
     },
     "barracks": {
       "name": "Казармы",
@@ -15,15 +19,23 @@
       "coins": 55,
       "max_level": 3,
       "wood": 35,
-      "stone": 10
+      "stone": 10,
+      "width": 2,
+      "height": 2,
+      "work": 14,
+      "hp": 240
     },
     "wall": {
       "name": "Стена",
-      "hint": "Каждая секция увеличивает прочность крепости во время осады.",
+      "hint": "Преграждает путь. Противнику придётся обойти или разрушить секцию.",
       "coins": 20,
       "max_level": 3,
       "wood": 25,
-      "stone": 10
+      "stone": 10,
+      "width": 1,
+      "height": 1,
+      "work": 6,
+      "hp": 150
     },
     "forge": {
       "name": "Кузница",
@@ -31,7 +43,11 @@
       "coins": 80,
       "max_level": 3,
       "wood": 50,
-      "stone": 20
+      "stone": 20,
+      "width": 2,
+      "height": 2,
+      "work": 14,
+      "hp": 240
     },
     "lab": {
       "name": "Лаборатория",
@@ -39,7 +55,11 @@
       "coins": 80,
       "max_level": 3,
       "wood": 50,
-      "stone": 20
+      "stone": 20,
+      "width": 2,
+      "height": 2,
+      "work": 14,
+      "hp": 240
     },
     "lumber": {
       "name": "Лесопилка",
@@ -48,7 +68,11 @@
       "wood": 25,
       "stone": 0,
       "max_level": 3,
-      "tech": "forestry"
+      "tech": "forestry",
+      "width": 2,
+      "height": 2,
+      "work": 14,
+      "hp": 240
     },
     "mine": {
       "name": "Шахта",
@@ -57,7 +81,36 @@
       "wood": 35,
       "stone": 10,
       "max_level": 3,
-      "tech": "mining"
+      "tech": "mining",
+      "width": 2,
+      "height": 2,
+      "work": 14,
+      "hp": 240
+    },
+    "house": {
+      "name": "Жилой дом",
+      "hint": "Даёт два места для новых рабочих на каждом уровне.",
+      "coins": 30,
+      "wood": 25,
+      "stone": 5,
+      "max_level": 3,
+      "width": 2,
+      "height": 2,
+      "work": 12,
+      "hp": 180
+    },
+    "farm": {
+      "name": "Ферма",
+      "hint": "Один рабочий выращивает еду и доставляет её в Штаб. Нужна агротехника.",
+      "coins": 35,
+      "wood": 25,
+      "stone": 5,
+      "max_level": 3,
+      "width": 2,
+      "height": 2,
+      "work": 14,
+      "hp": 180,
+      "tech": "agriculture"
     }
   },
   "troops": {
@@ -147,6 +200,13 @@
       "coins": 45,
       "wood": 30,
       "stone": 10
+    },
+    "agriculture": {
+      "name": "Агротехника",
+      "hint": "Открывает фермы. Еда нужна рабочим и гарнизону каждую игровую минуту.",
+      "coins": 25,
+      "wood": 15,
+      "stone": 0
     }
   }
 }
