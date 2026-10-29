@@ -1,0 +1,11 @@
+.godot/
+work/
+reports/local/
+*.log
+*.tmp
+*.bak
+exports/
+*.exe
+*.zip
+*.pck
+.DS_Store
