@@ -4,7 +4,9 @@ const Catalog=preload("res://scripts/catalog.gd")
 const WorldData=preload("res://scripts/world_data.gd")
 const Settlement=preload("res://scripts/settlement.gd")
 const WorldRules=preload("res://scripts/world_rules.gd")
-const SAVE_VERSION=3
+const Snapshot=preload("res://scripts/combat_snapshot.gd")
+const Logistics=preload("res://scripts/logistics.gd")
+const SAVE_VERSION=5
 var catalog=Catalog.new()
 var save_path="user://progress.json"
 var data:Dictionary={}
@@ -76,6 +78,7 @@ func _valid(d:Variant)->bool:
 	var combat=d.world.get("combat",{})
 	if not combat.is_empty():
 		if not combat.has("next_uid"):return false
+		if not combat.has("complete") and combat.get("legacy",false)!=true:return false
 		for unit in combat.units:
 			if not unit.has("uid"):return false
 	return Settlement.valid(d,catalog)
@@ -108,21 +111,24 @@ func _normalize():
 	for id in data.xp:data.xp[id]=int(data.xp[id])
 	for b in data.buildings:
 		for key in ["x","y","level","uid","width","height","paid_wood","paid_stone","target_level"]:b[key]=int(b[key])
+		if not b.repair.is_empty():
+			for key in ["wood","stone"]:b.repair[key]=int(b.repair[key])
 	for i in data.world.tiles.size():data.world.tiles[i]=int(data.world.tiles[i])
 	for source in data.world.sources:
 		for key in ["id","x","y","amount"]:source[key]=int(source[key])
 	for worker in data.world.workers:
-		for key in ["id","source","carry","workplace"]:worker[key]=int(worker[key])
+		for key in ["id","source","carry","workplace","depot"]:worker[key]=int(worker[key])
 	for key in ["width","height","seed","raids_defeated","raid_number"]:data.world[key]=int(data.world[key])
 	for unit in data.world.get("combat",{}).get("units",[]):
 		for key in ["team","rank"]:unit[key]=int(unit[key])
 		if unit.has("uid"):unit.uid=int(unit.uid)
 	if not data.world.get("combat",{}).is_empty():data.world.combat.next_uid=int(data.world.combat.next_uid)
+	if data.world.get("combat",{}).has("complete"):Snapshot.normalize(data.world.combat)
 	data.next_building_uid=int(data.next_building_uid)
 	for key in data.stats:data.stats[key]=int(data.stats[key])
 
 func _migrate(value:Variant)->Variant:
-	if not value is Dictionary or value.get("version") not in [1,1.0,2,2.0]:return value
+	if not value is Dictionary or value.get("version") not in [1,1.0,2,2.0,3,3.0,4,4.0]:return value
 	var migrated=value.duplicate(true)
 	if migrated.version==1:
 		migrated.wood=migrated.get("wood",migrated.get("materials",180));migrated.erase("materials")
@@ -134,7 +140,8 @@ func _migrate(value:Variant)->Variant:
 	if not WorldData.valid(migrated.world):return null
 	for b in migrated.buildings:
 		if not b is Dictionary or not catalog.data.buildings.has(b.get("id","")) or not WorldData.number(b.get("level")):return null
-	migrated.version=3;Settlement.initialize(migrated,catalog)
+	migrated.version=SAVE_VERSION;Settlement.initialize(migrated,catalog)
+	if not migrated.world.get("combat",{}).is_empty() and not migrated.world.combat.has("complete"):migrated.world.combat["legacy"]=true
 	return migrated
 
 func save_progress()->bool:
@@ -198,8 +205,8 @@ func can_build(id:String,cell:Vector2i)->String:
 				if source.amount>0 and int(source.x)==x and int(source.y)==y:return "Сначала добудьте ресурс на клетках постройки."
 	for b in data.buildings:
 		if Settlement.rect(b).intersects(area):return "Место уже занято зданием или стройкой."
-		if b.id=="hq" and area.has_point(Vector2i(int(b.x)+int(b.width)/2,int(b.y+b.height))):return "Оставьте свободным вход в Штаб."
-		if id not in ["wall","lumber","mine","house","farm"] and b.id==id:return "Такая постройка уже есть. Выберите её для улучшения."
+		if b.id in ["hq","warehouse"] and area.has_point(Vector2i(int(b.x)+int(b.width)/2,int(b.y+b.height))):return "Оставьте свободным вход в хранилище."
+		if id not in ["wall","gate","warehouse","lumber","mine","house","farm"] and b.id==id:return "Такая постройка уже есть. Выберите её для улучшения."
 	if def.has("tech") and not data.research.get(def.tech,false):return "Сначала откройте технологию: "+catalog.data.technologies[def.tech].name
 	if data.coins<def.coins or data.wood<def.wood or data.stone<def.stone:return "Недостаточно монет, древесины или камня."
 	return ""
@@ -210,7 +217,7 @@ func build(id:String,cell:Vector2i)->String:
 	var def=catalog.building(id)
 	data.coins-=int(def.coins);data.wood-=int(def.wood);data.stone-=int(def.stone)
 	data.buildings.append({"id":id,"uid":data.next_building_uid,"x":cell.x,"y":cell.y,"level":1,"target_level":1,"width":int(def.width),"height":int(def.height),
-		"built":false,"work_done":0.0,"hp":float(def.hp),"paid_wood":int(def.wood),"paid_stone":int(def.stone)})
+		"built":false,"work_done":0.0,"hp":float(def.hp),"paid_wood":int(def.wood),"paid_stone":int(def.stone),"gate_open":false,"repair":{}})
 	data.next_building_uid+=1
 	save_progress();return "Заложено: "+def.name+". Нужен рабочий-строитель."
 
@@ -218,6 +225,7 @@ func upgrade(index:int)->String:
 	if index<0 or index>=data.buildings.size():return "Сначала выберите постройку."
 	var b=data.buildings[index];var def=catalog.building(b.id)
 	if not b.built or b.target_level>b.level:return "Сначала завершите текущую стройку."
+	if not b.repair.is_empty():return "Сначала завершите или отмените ремонт."
 	if b.level>=def.max_level:return "Максимальный уровень в этом прототипе."
 	var coins=int(def.coins)*int(b.level);var materials=int(def.wood)*int(b.level);var stone=int(def.stone)*int(b.level)
 	if data.coins<coins or data.wood<materials or data.stone<stone:return "Недостаточно ресурсов для улучшения."
@@ -231,7 +239,7 @@ func hire_worker()->String:
 	var uid=0
 	for w in data.world.workers:uid=maxi(uid,int(w.id)+1)
 	data.coins-=40;data.food-=4
-	data.world.workers.append({"id":uid,"name":Settlement.NAMES[uid%Settlement.NAMES.size()],"x":17.0,"y":14.5,"job":"idle","source":-1,"carry":0,"carry_kind":"wood","progress":0.0,"preference":"auto","workplace":0,"returning":false})
+	data.world.workers.append({"id":uid,"name":Settlement.NAMES[uid%Settlement.NAMES.size()],"x":17.0,"y":14.5,"job":"idle","source":-1,"carry":0,"carry_kind":"wood","progress":0.0,"preference":"auto","workplace":0,"returning":false,"depot":0})
 	save_progress();return "Прибыл рабочий: "+data.world.workers[-1].name
 
 func demolish(index:int)->String:
@@ -240,6 +248,7 @@ func demolish(index:int)->String:
 	if b.id=="hq":return "Штаб нельзя снести."
 	if b.id=="house" and b.built and worker_capacity(int(b.uid))<data.world.workers.size():return "Сначала обеспечьте рабочих другим жильём."
 	data.wood+=int(b.paid_wood)/2;data.stone+=int(b.paid_stone)/2
+	var unused=Logistics.refund(b.repair);data.wood+=unused.wood;data.stone+=unused.stone
 	data.buildings.remove_at(index);save_progress();return "Постройка убрана. Возвращена половина затраченных древесины и камня."
 
 func research(id:String)->String:

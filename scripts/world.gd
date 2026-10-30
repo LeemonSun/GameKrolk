@@ -11,6 +11,10 @@ var search_after={}
 const Battle=preload("res://scripts/battle.gd")
 const WorldData=preload("res://scripts/world_data.gd")
 const WorldRules=preload("res://scripts/world_rules.gd")
+const Snapshot=preload("res://scripts/combat_snapshot.gd")
+const Logistics=preload("res://scripts/logistics.gd")
+var command_mode="advance"
+var navigation_signature=0
 var state
 var battle=Battle.new()
 var navigation=AStarGrid2D.new()
@@ -27,10 +31,11 @@ func _init(game_state):
 	state=game_state
 	rebuild_navigation()
 	_initialize_battle()
-	_restore_combat()
-	_relocate_blocked()
-	if not state.data.world.raid_active:sync_army()
-	_assign_jobs()
+	var complete=_restore_combat()
+	if not complete:
+		_relocate_blocked()
+		if not state.data.world.raid_active:sync_army()
+		_assign_jobs()
 	state.before_save=flush
 
 func home()->Vector2:
@@ -54,12 +59,21 @@ func rebuild_navigation():
 	for y in WorldData.HEIGHT:
 		for x in WorldData.WIDTH:navigation.set_point_solid(Vector2i(x,y),state.data.world.tiles[y*WorldData.WIDTH+x]==1)
 	for b in state.data.buildings:
+		if not Logistics.solid(b):continue
 		for x in range(int(b.x),int(b.x+b.width)):
 			for y in range(int(b.y),int(b.y+b.height)):navigation.set_point_solid(Vector2i(x,y),true)
 	paths.clear();destinations.clear();site_targets.clear();search_after.clear()
 	if state.data.world.raid_active:
 		for u in battle.units:
 			if u.team==1 and u.hp>0:_route_unit(u,home())
+	for u in battle.units:
+		if u.team==0 and u.hp>0 and u.goal!=Vector2.INF:_route_unit(u,u.goal,u.get("route_kind","order"))
+	navigation_signature=_navigation_signature()
+
+func _navigation_signature()->int:
+	var sites=[]
+	for building in state.data.buildings:sites.append([building.uid,building.x,building.y,building.width,building.height,Logistics.solid(building)])
+	return hash([state.data.world.tiles,sites])
 
 func _walkable(pos:Vector2)->bool:
 	var cell=Vector2i(floori(pos.x/WorldData.TILE),floori(pos.y/WorldData.TILE))
@@ -80,23 +94,34 @@ func _route(start:Vector2,end:Vector2)->Array:
 	for p in navigation.get_id_path(a,b):result.append(Vector2(p)+Vector2.ONE*0.5)
 	return result
 
-func _route_unit(u:Dictionary,destination:Vector2,kind:String="order"):
+func _route_unit(u:Dictionary,destination:Vector2,kind:String="order")->bool:
 	u["route_kind"]=kind
 	destination=_nearest_open(destination)
 	var route=_route(u.pos/WorldData.TILE,destination/WorldData.TILE)
-	if route.is_empty():
+	if route.is_empty() and u.team==1:
 		var a=Vector2i(u.pos/WorldData.TILE);var b=Vector2i(destination/WorldData.TILE)
 		if navigation.region.has_point(a) and navigation.region.has_point(b) and not navigation.is_point_solid(a) and not navigation.is_point_solid(b):
 			for p in navigation.get_id_path(a,b,true):route.append(Vector2(p)+Vector2.ONE*0.5)
 	u.path=[]
 	for p in route:u.path.append(p*WorldData.TILE)
-	if not route.is_empty():u.goal=route[-1]*WorldData.TILE;u.goal_until=battle.time+3600.0
+	u.route_blocked=route.is_empty()
+	if route.is_empty():u.goal=destination;u.goal_until=battle.time+3600.0;return false
+	if u.team==1:destination=route[-1]*WorldData.TILE
+	if u.path[-1].distance_to(destination)>1:u.path.append(destination)
+	u.goal=destination;u.goal_until=battle.time+3600.0;return true
 
 func order(group:String,pos:Vector2):
 	if not _walkable(pos):notice.emit("Точка недоступна: вода или укрепление.");return
-	battle.order(group,pos)
+	battle.order(group,pos,command_mode)
+	var accepted=0;var blocked=0
 	for u in battle.units:
-		if u.team==0 and u.hp>0 and (group=="all" or u.kind==group):_route_unit(u,u.goal)
+		if u.team==0 and u.hp>0 and (group=="all" or u.kind==group):
+			if _route_unit(u,u.goal):accepted+=1
+			else:blocked+=1
+	if blocked>0:notice.emit("Приказ получили %d; нет пути для %d бойцов."%[accepted,blocked])
+
+func stop(group:String,hold:bool=false):
+	battle.stop(group,hold);notice.emit("Удерживать позицию." if hold else "Маршрут отменён; свободная оборона.")
 
 func sync_army():
 	var hero=battle.units[0];var def=state.catalog.hero(state.data.selected_hero)
@@ -208,14 +233,24 @@ func _travel(w:Dictionary,target:Vector2,dt:float)->bool:
 func _work(w:Dictionary,dt:float):
 	work_status[int(w.id)]={"idle":"Отдыхает" if w.preference=="rest" else "Ждёт задания","manual":"Добывает выбранный ресурс","wood":"Заготовка древесины","stone":"Добыча камня","farm":"Выращивает еду","build":"Строит"}[w.job]
 	var source=_source(int(w.source))
-	if w.returning or w.carry>=5 or (w.carry>0 and w.job in ["wood","stone","manual"] and (source.is_empty() or source.amount<=0)):
-		work_status[int(w.id)]="Несёт %d %s в Штаб"%[w.carry,{"wood":"дерева","stone":"камня","food":"еды"}[w.carry_kind]]
-		if _travel(w,home()/WorldData.TILE,dt):
-			state.data[w.carry_kind]+=int(w.carry);state.data.stats[w.carry_kind+"_delivered"]+=int(w.carry);w.carry=0;paths.erase(int(w.id))
+	if w.returning or w.carry>=5 or (w.carry>0 and (Logistics.room(state.data,w.carry_kind)==0 or (w.job in ["wood","stone","manual"] and (source.is_empty() or source.amount<=0)))):
+		var free=Logistics.room(state.data,w.carry_kind)
+		if free==0:work_status[int(w.id)]="Хранилища заполнены; груз %d сохранён"%w.carry;return
+		var target=_delivery_target(w)
+		if target==Vector2.INF:work_status[int(w.id)]="Нет пути к хранилищу; груз сохранён";return
+		work_status[int(w.id)]="Несёт %d %s в %s"%[w.carry,{"wood":"дерева","stone":"камня","food":"еды"}[w.carry_kind],"Штаб" if state.building_uid(int(w.depot)).get("id")=="hq" else "склад"]
+		if _travel(w,target,dt):
+			var amount=mini(int(w.carry),free)
+			state.data[w.carry_kind]+=amount;state.data.stats[w.carry_kind+"_delivered"]+=amount;w.carry-=amount;paths.erase(int(w.id))
+			if w.carry>0:w.returning=true;return
+			w.depot=0;site_targets.erase(int(w.id))
 			if w.returning or (w.job=="manual" and (source.is_empty() or source.amount<=0)):
 				w.returning=false;w.job="idle";w.workplace=0;w.source=-1;w.progress=0.0
 		return
 	if w.job=="idle":return
+	if w.job in ["wood","stone","manual","farm"]:
+		var output="food" if w.job=="farm" else (source.get("kind","wood") if w.job=="manual" else w.job)
+		if Logistics.room(state.data,output)==0:work_status[int(w.id)]="Пауза производства: хранилища заполнены";return
 	if w.job in ["build","farm"]:
 		var building=state.building_uid(int(w.workplace))
 		if building.is_empty():_release(w);return
@@ -223,6 +258,17 @@ func _work(w:Dictionary,dt:float):
 		if point==Vector2.INF:work_status[int(w.id)]="Нет пути к рабочему месту";return
 		if not _travel(w,point,dt):return
 		if w.job=="build":
+			if not building.repair.is_empty():
+				work_status[int(w.id)]="Ремонтирует "+state.catalog.building(building.id).name
+				var maximum=battle.keep_max if building.id=="hq" else float(state.catalog.building(building.id).hp)*int(building.level)
+				var current=battle.keep_hp if building.id=="hq" else float(building.hp)
+				var restored=minf(float(building.repair.remaining),minf(float(building.repair.rate)*dt,maximum-current))
+				if building.id=="hq":battle.keep_hp+=restored
+				else:building.hp+=restored
+				building.repair.remaining=maxf(0,float(building.repair.remaining)-restored)
+				if building.repair.remaining<0.00001 or current+restored>=maximum-0.00001:
+					building.repair={};_release(w);notice.emit("Ремонт завершён: "+state.catalog.building(building.id).name);settlement_changed.emit()
+				return
 			building.work_done=minf(required_work(building),float(building.work_done)+dt)
 			if building.work_done>=required_work(building):
 				building.built=true;building.level=int(building.target_level);building.hp=float(state.catalog.building(building.id).hp)*building.level
@@ -307,24 +353,59 @@ func _end_raid(won:bool):
 	if state.army_count()==0:state.data.army.militia=3
 	state.automate();sync_army();flush();state.save_progress();raid_finished.emit(won)
 
-func repair()->String:
-	if battle.keep_hp>=battle.keep_max:return "Штаб не нуждается в ремонте."
-	if state.data.wood<20 or state.data.stone<10:return "Для ремонта нужно 20 древесины и 10 камня."
-	state.data.wood-=20;state.data.stone-=10;battle.keep_hp=battle.keep_max;flush();state.save_progress();return "Штаб отремонтирован."
+func repair_quote(uid:int)->Dictionary:
+	var b=state.building_uid(uid)
+	if b.is_empty():return {}
+	return Logistics.repair_quote(b,battle.keep_hp if b.id=="hq" else float(b.hp),battle.keep_max if b.id=="hq" else float(state.catalog.building(b.id).hp)*int(b.level),state.catalog)
+
+func repair(uid:int=-1)->String:
+	if uid<0:
+		for building in state.data.buildings:
+			if building.id=="hq":uid=int(building.uid);break
+	var b=state.building_uid(uid);var quote=repair_quote(uid)
+	if quote.is_empty():return "Нет доступного ремонта: постройка цела, строится или уже ремонтируется."
+	if state.data.wood<quote.wood or state.data.stone<quote.stone:return "Нужно %d древесины и %d камня."%[quote.wood,quote.stone]
+	state.data.wood-=int(quote.wood);state.data.stone-=int(quote.stone);b.repair=quote
+	_assign_jobs();state.save_progress();return "Заказан ремонт: "+state.catalog.building(b.id).name+". Материалы оплачены, нужен строитель."
+
+func cancel_repair(uid:int)->String:
+	var b=state.building_uid(uid)
+	if b.is_empty() or b.repair.is_empty():return "Ремонт не назначен."
+	var unused=Logistics.refund(b.repair);state.data.wood+=unused.wood;state.data.stone+=unused.stone;b.repair={}
+	_assign_jobs();state.save_progress();return "Ремонт отменён. Возвращено %d дерева и %d камня за оставшуюся работу."%[unused.wood,unused.stone]
+
+func toggle_gate(uid:int)->String:
+	var b=state.building_uid(uid)
+	if b.is_empty() or b.id!="gate" or not b.built:return "Сначала достройте ворота."
+	if b.gate_open and occupied(Vector2i(int(b.x),int(b.y))):return "Нельзя закрыть ворота: проход занят человеком."
+	b.gate_open=not b.gate_open;rebuild_navigation();_assign_jobs();state.save_progress()
+	return "Ворота открыты для всех, включая врага." if b.gate_open else "Ворота закрыты. Проход перекрыт."
 
 func flush():
+	if navigation_signature!=_navigation_signature():rebuild_navigation()
 	if not state.data.world.raid_active:sync_army()
-	var snapshot={"keep_hp":float(battle.keep_hp),"keep_max":float(battle.keep_max),"cooldown":float(battle.hero_cooldown),"raid_time":float(raid_time),"next_uid":battle.next_uid,"units":[]}
-	for u in battle.units:
-		if u.kind!="hero" and u.hp<=0:continue
-		var row={"kind":u.kind,"uid":u.uid,"team":u.team,"x":u.pos.x,"y":u.pos.y,"hp":u.hp}
-		for key in ["max_hp","damage","speed","reach","cooldown","rank"]:row[key]=u[key]
-		snapshot.units.append(row)
+	var snapshot=Snapshot.capture(battle);snapshot.raid_time=float(raid_time)
+	var runtime={"accumulator":float(accumulator),"job_timer":float(job_timer),"chase_clock":float(chase_clock),"command_mode":command_mode,"paused":paused,"workers":[]}
+	for worker in state.data.world.workers:
+		var id=int(worker.id)
+		runtime.workers.append({"id":id,"path":Snapshot.pack(paths.get(id,[])),"destination":Snapshot.pack(destinations.get(id,null)),"site":Snapshot.pack(site_targets.get(id,{})),"search_after":float(search_after.get(id,0))})
+	snapshot["runtime"]=runtime
 	state.data.world["combat"]=snapshot
 
-func _restore_combat():
+func _restore_combat()->bool:
 	var snapshot=state.data.world.get("combat",{})
-	if snapshot.is_empty():return
+	if snapshot.is_empty():return false
+	if snapshot.has("complete"):
+		Snapshot.restore(battle,snapshot);raid_time=float(snapshot.raid_time)
+		var runtime=snapshot.runtime
+		accumulator=float(runtime.accumulator);job_timer=float(runtime.job_timer);chase_clock=float(runtime.chase_clock);command_mode=runtime.command_mode
+		paused=runtime.paused
+		for row in runtime.workers:
+			var id=int(row.id);paths[id]=Snapshot.unpack(row.path)
+			if row.destination!=null:destinations[id]=Snapshot.unpack(row.destination)
+			if not row.site.is_empty():site_targets[id]=Snapshot.unpack(row.site);site_targets[id].uid=int(site_targets[id].uid)
+			search_after[id]=float(row.search_after)
+		return true
 	battle.units.clear();battle.next_uid=0
 	for row in snapshot.units:
 		var def={"hp":row.max_hp,"damage":row.damage,"speed":row.speed,"reach":row.reach,"cooldown":row.cooldown,"rank":row.rank}
@@ -337,8 +418,9 @@ func _restore_combat():
 	if state.data.world.raid_active:
 		for u in battle.units:
 			if u.team==1 and u.hp>0:_route_unit(u,home())
+	return false
 
-func needs_work(b:Dictionary)->bool:return not b.built or int(b.target_level)>int(b.level)
+func needs_work(b:Dictionary)->bool:return not b.built or int(b.target_level)>int(b.level) or not b.repair.is_empty()
 
 func required_work(b:Dictionary)->float:return float(state.catalog.building(b.id).work)*int(b.target_level)
 
@@ -388,6 +470,25 @@ func _site_target(w:Dictionary,b:Dictionary)->Vector2:
 		var route=_route(Vector2(w.x,w.y),p)
 		if not route.is_empty() and route.size()<distance:distance=route.size();best=p
 	if best!=Vector2.INF:site_targets[key]={"uid":int(b.uid),"point":best}
+	return best
+
+func _delivery_target(w:Dictionary)->Vector2:
+	# Retain the chosen depot through a trip and save/load. Reconsider only if
+	# destroyed or disconnected; nearest means actual path length, not distance.
+	var chosen=state.building_uid(int(w.depot))
+	if not chosen.is_empty() and chosen.built and chosen.id in ["hq","warehouse"]:
+		var point=home()/WorldData.TILE if chosen.id=="hq" else _site_target(w,chosen)
+		if point!=Vector2.INF and not _route(Vector2(w.x,w.y),point).is_empty():return point
+	w.depot=0;site_targets.erase(int(w.id))
+	var best=Vector2.INF;var distance=INF;var depot_uid=0
+	for depot in state.data.buildings:
+		if not depot.built or depot.id not in ["hq","warehouse"]:continue
+		var point=home()/WorldData.TILE if depot.id=="hq" else _site_target(w,depot)
+		if point==Vector2.INF:continue
+		var route=_route(Vector2(w.x,w.y),point)
+		if not route.is_empty() and route.size()<distance:best=point;distance=route.size();depot_uid=int(depot.uid)
+	w.depot=depot_uid;site_targets.erase(int(w.id))
+	if best!=Vector2.INF:site_targets[int(w.id)]={"uid":depot_uid,"point":best}
 	return best
 
 func _nearest_open(pos:Vector2)->Vector2:
@@ -443,6 +544,7 @@ func _compact_army():
 func _update_chase_paths():
 	for u in battle.units:
 		if u.team!=0 or u.hp<=0 or u.target<0 or u.target>=battle.units.size():continue
+		if u.command in ["move","hold"]:continue
 		if u.goal!=Vector2.INF and u.get("route_kind","")!="chase":continue
 		var target=battle.units[u.target]
 		if target.hp<=0:continue

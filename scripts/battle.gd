@@ -80,7 +80,7 @@ func _add_unit(kind:String,team:int,pos:Vector2,def:Dictionary):
 	var u={"id":units.size(),"uid":next_uid,"kind":kind,"team":team,"pos":pos,"prev":pos,"home":pos,"hp":float(def.hp),"max_hp":float(def.hp),
 		"damage":float(def.damage)*(1.0+forge*0.07 if team==0 else 1.0),"speed":float(def.speed),"reach":float(def.reach),"cooldown":float(def.cooldown),
 		"rank":int(def.get("rank",1)),"timer":rng.randf_range(0,0.5),"target":-1,"attack_target":-1,"windup":0.0,"attack_left":0.0,
-		"facing":Vector2.RIGHT if team==0 else Vector2.LEFT,"goal":Vector2.INF,"goal_until":0.0,"moving":false,"flash":0.0,"died":-1.0,"poison":0.0,"path":[]}
+		"facing":Vector2.RIGHT if team==0 else Vector2.LEFT,"goal":Vector2.INF,"goal_until":0.0,"moving":false,"flash":0.0,"died":-1.0,"poison":0.0,"path":[],"command":"guard","route_blocked":false}
 	units.append(u)
 	next_uid+=1
 
@@ -104,7 +104,7 @@ func _near(pos:Vector2,team:int,radius:float)->Array:
 
 func _find_target(u:Dictionary)->int:
 	var closest=-1;var distance=INF;var center=_cell(u.pos)
-	var radius=230.0 if u.reach>60 else 160.0
+	var radius=float(u.reach) if u.command=="hold" else (230.0 if u.reach>60 else 160.0)
 	# Search local rings first; an engaged unit does not scan the whole battle.
 	for ring in range(ceili(radius/CELL)+1):
 		for x in range(center.x-ring,center.x+ring+1):
@@ -130,7 +130,7 @@ func survivors()->Dictionary:
 		if u.team==0 and u.hp>0 and counts.has(u.kind):counts[u.kind]+=1
 	return counts
 
-func order(group:String,pos:Vector2):
+func order(group:String,pos:Vector2,command:String="advance"):
 	if finished:return
 	pos=pos.clamp(Vector2(65,45),SIZE-Vector2(40,45))
 	var count=0
@@ -138,15 +138,18 @@ func order(group:String,pos:Vector2):
 		if u.team==0 and u.hp>0 and (group=="all" or group==u.kind):count+=1
 	var columns=mini(25,maxi(1,ceili(sqrt(float(count)))))
 	var rows=ceili(float(count)/columns)
-	var extent=Vector2((columns-1)*8.5,(rows-1)*9.5)
+	var spacing=Vector2(24,26) if mode=="world" else Vector2(17,19)
+	var extent=Vector2(columns-1,rows-1)*spacing*0.5
 	pos=pos.clamp(Vector2(65,45)+extent,SIZE-Vector2(40,45)-extent)
 	var n=0
 	for u in units:
 		if u.team!=0 or u.hp<=0:continue
 		if group!="all" and group!=u.kind:continue
-		var offset=Vector2((float(n%columns)-(columns-1)*0.5)*17,(float(n/columns)-(rows-1)*0.5)*19)
+		var offset=Vector2(float(n%columns)-(columns-1)*0.5,float(n/columns)-(rows-1)*0.5)*spacing
 		if group=="hero":offset=Vector2.ZERO
-		u.goal=(pos+offset).clamp(Vector2(65,35),SIZE-Vector2(35,35));u.goal_until=time+12.0;n+=1
+		u.goal=(pos+offset).clamp(Vector2(65,35),SIZE-Vector2(35,35));u.goal_until=time+3600.0;u.command=command
+		u.target=-1;u.attack_target=-1;u.attack_left=0.0;n+=1
+		u.route_blocked=false
 	effects.append({"type":"order","pos":pos,"age":0.0,"life":0.8,"radius":22.0,"color":Color("d6c18b")})
 
 func step(dt:float):
@@ -167,24 +170,28 @@ func step(dt:float):
 			u.attack_left-=dt
 			if u.attack_left<=0:_resolve_attack(u)
 			continue
+		var commanded=u.goal!=Vector2.INF and time<u.goal_until
+		if commanded and u.pos.distance_to(u.goal)<(2.5 if mode=="world" else 9.0):
+			u.home=u.goal;u.goal=Vector2.INF;u.path.clear();commanded=false
+			if u.command=="move":u.command="guard"
+		var ignore_enemy=u.command=="move" and commanded
+		if ignore_enemy:u.target=-1
 		var valid_target=u.target>=0 and units[u.target].hp>0
 		if not valid_target:
-			if u.target>=0 or tick%12==int(u.id)%12:u.target=_find_target(u)
+			if not ignore_enemy and (u.target>=0 or tick%12==int(u.id)%12):u.target=_find_target(u)
 		elif tick%30==int(u.id)%30 and u.pos.distance_squared_to(units[u.target].pos)>pow(u.reach+30,2):u.target=_find_target(u)
 		var movement=Vector2.ZERO
 		var target=units[u.target] if u.target>=0 and units[u.target].hp>0 else null
 		var dist=u.pos.distance_to(target.pos) if target!=null else INF
-		var commanded=u.goal!=Vector2.INF and time<u.goal_until
-		if commanded and u.pos.distance_to(u.goal)<9:
-			u.home=u.goal;u.goal=Vector2.INF;commanded=false
 		if target!=null and dist<=u.reach and (not line_clear.is_valid() or line_clear.call(u.pos,target.pos)):
 			u.facing=(target.pos-u.pos).normalized()
 			if u.timer<=0:
 				u.attack_target=target.id;u.windup=0.17 if u.reach<60 else 0.25;u.attack_left=u.windup;u.timer=u.cooldown
 		elif commanded:
-			while not u.path.is_empty() and u.pos.distance_to(u.path[0])<6:u.path.pop_front()
-			movement=((u.path[0] if not u.path.is_empty() else u.goal)-u.pos).normalized()
-		elif target!=null:movement=(target.pos-u.pos).normalized()
+			if not u.route_blocked:
+				while not u.path.is_empty() and u.pos.distance_to(u.path[0])<6:u.path.pop_front()
+				movement=((u.path[0] if not u.path.is_empty() else u.goal)-u.pos).normalized()
+		elif target!=null and u.command!="hold":movement=(target.pos-u.pos).normalized()
 		elif u.team==1:
 			var keep=keep_position
 			if u.pos.distance_to(keep)<45 and (not line_clear.is_valid() or line_clear.call(u.pos,keep)):
@@ -215,6 +222,13 @@ func step(dt:float):
 	if keep_hp<=0 or alive(0)==0 or time>=180:
 		finished=true;won=false
 	elif alive(1)==0:finished=true;won=true
+
+func stop(group:String,hold:bool=false):
+	for unit in units:
+		if unit.team!=0 or unit.hp<=0 or (group!="all" and unit.kind!=group):continue
+		unit.command="hold" if hold else "guard";unit.goal=Vector2.INF;unit.path.clear();unit.goal_until=0.0;unit.home=unit.pos
+		unit.route_blocked=false
+		unit.target=-1;unit.attack_target=-1;unit.attack_left=0.0
 
 func _trace(a:Vector2,b:Vector2):
 	traces.append({"a":a,"b":b,"born":time})
@@ -293,7 +307,8 @@ func skill()->String:
 		for u in units:
 			if u.team==1 and u.hp>0 and hero.pos.distance_to(u.pos)<125:
 				_damage(u.id,42,hero_id)
-				u.pos=(u.pos+(u.pos-hero.pos).normalized()*32).clamp(Vector2(60,30),SIZE-Vector2(25,30))
+				var pushed=(u.pos+(u.pos-hero.pos).normalized()*32).clamp(Vector2(60,30),SIZE-Vector2(25,30))
+				if not walkable.is_valid() or (walkable.call(pushed) and (not line_clear.is_valid() or line_clear.call(u.pos,pushed))):u.pos=pushed
 		effects.append({"type":"pulse","pos":hero.pos,"age":0.0,"life":0.7,"radius":125.0,"color":Color("e8c98c")})
 	return catalog.hero(hero_kind).skill
 

@@ -17,6 +17,7 @@ const BaseView=preload("res://scripts/world_view.gd")
 const World=preload("res://scripts/world.gd")
 const BattleView=preload("res://scripts/battle_view.gd")
 const Palette=preload("res://scripts/palette.gd")
+const Logistics=preload("res://scripts/logistics.gd")
 const BG=Palette.BG
 const PANEL=Palette.PANEL
 const ACCENT=Palette.ACCENT
@@ -35,7 +36,7 @@ var battle_stats:Label
 var skill_button:Button
 var content:HBoxContainer
 var root:VBoxContainer
-var toolbar:HBoxContainer
+var toolbar:Container
 var tab="build"
 var selected_building=-1
 var placement=""
@@ -66,7 +67,7 @@ func _ready():
 	if test_mode:session_started=true;start_menu.hide()
 	else:_open_main_menu()
 	if not state.warning.is_empty():_notice(state.warning,15)
-	print("GAMEKROLK_READY "+JSON.stringify({"version":"0.0.3","save":ProjectSettings.globalize_path(state.save_path),"renderer":RenderingServer.get_current_rendering_method()}))
+	print("GAMEKROLK_READY "+JSON.stringify({"version":"0.0.5","save":ProjectSettings.globalize_path(state.save_path),"renderer":RenderingServer.get_current_rendering_method()}))
 
 func _style(color:Color,border:Color=Color.TRANSPARENT,radius:int=10)->StyleBoxFlat:
 	var s=StyleBoxFlat.new();s.bg_color=color
@@ -97,12 +98,12 @@ func _setup_ui():
 	var header=HBoxContainer.new();root.add_child(header)
 	var brand=VBoxContainer.new();brand.size_flags_horizontal=Control.SIZE_EXPAND_FILL;brand.add_theme_constant_override("separation",1);header.add_child(brand)
 	title=_label("КРОЛИК  /  ЦИТАДЕЛЬ",29,ACCENT);brand.add_child(title)
-	subtitle=_label("ЖИВОЙ УЧАСТОК    ·    технический прототип 0.0.3    ·    графика временная",12,MUTED);brand.add_child(subtitle)
+	subtitle=_label("ЖИВОЙ УЧАСТОК    ·    прототип 0.0.5    ·    хозяйство и оборона",12,MUTED);brand.add_child(subtitle)
 	header.add_child(_button("Сохранить",func():_notice("Прогресс сохранён." if state.save_progress() else state.warning)))
 	header.add_child(_button("Меню",_open_main_menu))
 	header.add_child(_button("Во весь экран  F11",_fullscreen))
 	var resource_panel=PanelContainer.new();root.add_child(resource_panel);resources=_label("",17,INK);resource_panel.add_child(resources)
-	toolbar=HBoxContainer.new();root.add_child(toolbar)
+	toolbar=HFlowContainer.new();root.add_child(toolbar)
 	content=HBoxContainer.new();content.size_flags_vertical=Control.SIZE_EXPAND_FILL;content.add_theme_constant_override("separation",16);root.add_child(content)
 	var stage=PanelContainer.new();stage.size_flags_horizontal=Control.SIZE_EXPAND_FILL;stage.size_flags_vertical=Control.SIZE_EXPAND_FILL;content.add_child(stage)
 	var layers=Control.new();layers.custom_minimum_size=Vector2(640,460);layers.size_flags_vertical=Control.SIZE_EXPAND_FILL;layers.size_flags_horizontal=Control.SIZE_EXPAND_FILL;stage.add_child(layers)
@@ -129,7 +130,7 @@ func _refresh():
 	_update_resources();live_labels.clear();_clear(toolbar);_clear(sidebar)
 	if in_battle:_battle_ui();return
 	if not state.data.world.raid_active:world.sync_army()
-	for entry in [["build","Строить"],["people","Люди"],["goals","Рубежи"],["heroes","Герои"],["army","Армия"],["officers","Должности"],["tech","Технологии"]]:
+	for entry in [["build","Строить"],["people","Люди"],["logistics","Снабжение"],["goals","Рубежи"],["orders","Приказы"],["heroes","Герои"],["army","Армия"],["officers","Должности"],["tech","Технологии"]]:
 		var b=_button(entry[1],_set_tab.bind(entry[0]),tab==entry[0]);toolbar.add_child(b)
 	var spacer=Control.new();spacer.size_flags_horizontal=Control.SIZE_EXPAND_FILL;toolbar.add_child(spacer)
 	toolbar.add_child(_button("Продолжить" if world.paused else "Пауза  P",_pause_world))
@@ -138,12 +139,14 @@ func _refresh():
 	match tab:
 		"build":_build_ui()
 		"people":_people_ui()
+		"logistics":_logistics_ui()
 		"goals":_goals_ui()
+		"orders":_orders_ui()
 		"heroes":_heroes_ui()
 		"army":_army_ui()
 		"officers":_officers_ui()
 		"tech":_tech_ui()
-	base.selected=selected_building;base.selected_source=selected_source;base.placement=placement;base.queue_redraw()
+	base.selected=selected_building;base.selected_source=selected_source;base.placement=placement;base.show_orders=tab=="orders";base.queue_redraw()
 
 func _set_tab(value:String):
 	tab=value;placement="";base.placement="";_refresh()
@@ -168,21 +171,30 @@ func _build_ui():
 		_heading("%s · %s"%[def.name,"уровень "+str(building.level) if building.built else "стройка"])
 		_hint(def.hint)
 		var progress=_label("",14,ACCENT);live_labels["building_progress"]=progress;sidebar.add_child(progress)
+		if building.id=="gate" and building.built:
+			sidebar.add_child(_button("Закрыть ворота" if building.gate_open else "Открыть ворота",func():_notice(world.toggle_gate(int(building.uid)));_refresh(),true))
+			_hint("Открытый проход доступен обеим сторонам. Занятый проход закрыть нельзя.")
+		var quote=world.repair_quote(int(building.uid))
+		if not building.repair.is_empty():
+			sidebar.add_child(_button("Отменить ремонт",func():_notice(world.cancel_repair(int(building.uid)));_refresh()))
+		elif not quote.is_empty():
+			sidebar.add_child(_button("Ремонт · %d дерева / %d камня"%[quote.wood,quote.stone],func():_notice(world.repair(int(building.uid)));_refresh(),true))
 		if building.built and building.target_level==building.level and building.level<def.max_level:
-			sidebar.add_child(_button("Улучшить · %d / %d / %d"%[def.coins*building.level,def.wood*building.level,def.stone*building.level],_upgrade,true))
+			var upgrade_button=_button("Улучшить · %d / %d / %d"%[def.coins*building.level,def.wood*building.level,def.stone*building.level],_upgrade,true)
+			upgrade_button.disabled=not building.repair.is_empty();sidebar.add_child(upgrade_button)
 		if building.id!="hq":sidebar.add_child(_button("Убрать постройку…",_ask_demolish))
 		_line()
 	elif placement.is_empty():_hint("Выберите здание на карте для улучшения. Новую стройку выполняет рабочий; размеры видны под курсором.")
 	if not placement.is_empty():_hint("Размещаете: "+state.catalog.building(placement).name+". ЛКМ — заложить, Esc — отменить.")
 	var grid=GridContainer.new();grid.columns=2;sidebar.add_child(grid)
-	for id in ["wall","house","lumber","mine","farm","barracks","forge","lab","hq"]:
+	for id in ["wall","gate","warehouse","house","lumber","mine","farm","barracks","forge","lab","hq"]:
 		var def=state.catalog.building(id)
 		var button=_button("%s\n%d / %d / %d"%[def.name,def.coins,def.wood,def.stone],_place.bind(id),placement==id)
 		button.custom_minimum_size.y=62;button.size_flags_horizontal=Control.SIZE_EXPAND_FILL
 		button.disabled=def.has("tech") and not state.data.research.get(def.tech,false)
 		button.tooltip_text=def.hint+"\nРазмер: %d×%d. Стройка: %d секунд работы."%[def.width,def.height,def.work];grid.add_child(button)
 	_line();_hint("Цена: монеты / древесина / камень. Лес, шахты и фермы требуют технологий и рабочих. Рабочее место обслуживает один человек.")
-	sidebar.add_child(_button("Ремонт Штаба · 20 дерева / 10 камня",func():_notice(world.repair());_refresh()))
+	_hint("Повреждённую постройку выберите на карте: ремонт выполняет строитель после оплаты материалов.")
 	_update_live()
 
 func _place(id:String):
@@ -401,12 +413,35 @@ func _unhandled_key_input(event):
 				if placement.is_empty():_open_main_menu()
 				else:placement="";_refresh()
 			KEY_P:_pause_world()
+			KEY_S:world.stop(base.command_group)
+			KEY_H:world.stop(base.command_group,true)
 			KEY_SPACE:_notice("Снимите паузу для применения техники." if world.paused else world.battle.skill())
-			KEY_1:base.command_group="all";_notice("Приказ получат все бойцы.")
-			KEY_2:base.command_group="hero";_notice("Приказ получит только герой.")
-			KEY_3:base.command_group="militia";_notice("Приказ получат мечники.")
-			KEY_4:base.command_group="archer";_notice("Приказ получат лучники.")
-			KEY_5:base.command_group="guard";_notice("Приказ получат стражи.")
+			KEY_1:_world_group("all");_notice("Приказ получат все бойцы.")
+			KEY_2:_world_group("hero");_notice("Приказ получит только герой.")
+			KEY_3:_world_group("militia");_notice("Приказ получат мечники.")
+			KEY_4:_world_group("archer");_notice("Приказ получат лучники.")
+			KEY_5:_world_group("guard");_notice("Приказ получат стражи.")
+
+func _orders_ui():
+	_heading("Управление бойцами")
+	_hint("Выберите группу и режим, затем укажите место правой кнопкой на карте. Приказы доступны на паузе.")
+	var grid=GridContainer.new();grid.columns=2;sidebar.add_child(grid)
+	for entry in [["all","Все"],["hero","Герой"],["militia","Мечники"],["archer","Лучники"],["guard","Стражи"]]:
+		var button=_button(entry[1],_world_group.bind(entry[0]),base.command_group==entry[0]);button.size_flags_horizontal=Control.SIZE_EXPAND_FILL;grid.add_child(button)
+	_line()
+	sidebar.add_child(_button("Идти без остановки на бой",_world_mode.bind("move"),world.command_mode=="move"))
+	sidebar.add_child(_button("Двигаться с ответным боем",_world_mode.bind("advance"),world.command_mode=="advance"))
+	_hint("Обычный приказ не отвлекается на врага по пути. При движении с боем отряд останавливается, чтобы атаковать противника в пределах оружия.")
+	_line()
+	sidebar.add_child(_button("Удерживать позицию  H",func():world.stop(base.command_group,true)))
+	sidebar.add_child(_button("Отменить маршрут  S",func():world.stop(base.command_group)))
+	_hint("Удержание запрещает преследование, но оставляет атаки в пределах оружия. Отмена маршрута возвращает свободную оборону. При закрытом проходе бойцы ждут; после открытия продолжают путь.")
+	var status=_label("",14,ACCENT);live_labels["orders"]=status;sidebar.add_child(status);_update_live()
+
+func _world_group(group:String):
+	base.command_group=group
+	if tab=="orders":_refresh()
+func _world_mode(mode:String):world.command_mode=mode;_refresh()
 
 func _fullscreen():
 	var window=get_window();window.mode=Window.MODE_WINDOWED if window.mode==Window.MODE_FULLSCREEN else Window.MODE_FULLSCREEN
@@ -475,6 +510,14 @@ func _resolve_selected():
 
 func _update_live():
 	if in_battle:return
+	if live_labels.has("orders"):
+		var total=0;var moving=0;var waiting=0
+		for unit in world.battle.units:
+			if unit.team!=0 or unit.hp<=0 or (base.command_group!="all" and unit.kind!=base.command_group):continue
+			total+=1
+			if unit.route_blocked:waiting+=1
+			elif unit.goal!=Vector2.INF:moving+=1
+		live_labels.orders.text="Выбрано: %d · с маршрутом: %d · ждут прохода: %d"%[total,moving,waiting]
 	for worker in state.data.world.workers:
 		var key="worker_"+str(int(worker.id))
 		if live_labels.has(key):live_labels[key].text=world.worker_status(int(worker.id))
@@ -482,8 +525,39 @@ func _update_live():
 		live_labels.food.text="Еды нет — скорость работы 60%." if state.data.food==0 else "Запас еды: %d. Следующая трапеза через %d с."%[state.data.food,ceili(60-state.data.world.food_clock)]
 	if live_labels.has("building_progress") and selected_building>=0 and selected_building<state.data.buildings.size():
 		var building=state.data.buildings[selected_building]
-		live_labels.building_progress.text="Работа: %d%% · к уровню %d"%[mini(100,roundi(building.work_done/world.required_work(building)*100)),building.target_level] if world.needs_work(building) else "Построено · прочность %d / %d"%[building.hp,state.catalog.building(building.id).hp*building.level]
+		if not building.repair.is_empty():live_labels.building_progress.text="Ремонт: %d%% · осталось восстановить %d"%[roundi(100*(1.0-building.repair.remaining/building.repair.total)),ceili(building.repair.remaining)]
+		else:live_labels.building_progress.text="Работа: %d%% · к уровню %d"%[mini(100,roundi(building.work_done/world.required_work(building)*100)),building.target_level] if world.needs_work(building) else "Построено · прочность %d / %d"%[building.hp,state.catalog.building(building.id).hp*building.level]
 		if building.id=="hq":live_labels.building_progress.text+="\nШтаб: %d / %d"%[world.battle.keep_hp,world.battle.keep_max]
+	if live_labels.has("storage"):
+		var lines=[]
+		for entry in [["wood","Древесина"],["stone","Камень"],["food","Провиант"]]:
+			var current=int(state.data[entry[0]]);var capacity=Logistics.capacity(state.data,entry[0])
+			lines.append("%s: %d / %d%s"%[entry[1],current,capacity," · нет места" if current>=capacity else ""])
+		live_labels.storage.text="\n".join(lines)
+	if live_labels.has("logistics"):
+		var carriers=0;var cargo=0;var stalled=0
+		for w in state.data.world.workers:
+			if w.carry>0:carriers+=1;cargo+=int(w.carry)
+			if "хранилищ" in world.worker_status(int(w.id)).to_lower():stalled+=1
+		live_labels.logistics.text="Груз у людей: %d · носильщиков: %d\nОжидают места или пути: %d\nРасход еды: %d в минуту"%[cargo,carriers,stalled,world.food_need()]
+
+func _logistics_ui():
+	_heading("Снабжение поселения")
+	_hint("Добыча даёт запас только после разгрузки. Рабочий выбирает ближайший доступный Штаб или склад по длине пути.")
+	var stocks=_label("",18,ACCENT);live_labels.storage=stocks;sidebar.add_child(stocks)
+	var details=_label("",15);live_labels.logistics=details;sidebar.add_child(details)
+	_line();_hint("Полное хранилище останавливает добычу. Уже поднятый груз остаётся у людей. Трата запасов освобождает место; работа возобновляется.")
+	sidebar.add_child(_button("Разместить склад",_place.bind("warehouse"),true))
+	_hint("Склад 2×2: 45 монет / 35 дерева / 15 камня. Уровень: +180 дерева, +140 камня, +60 еды. Запасы общие для поселения.")
+	_line();_hint("Снос или потеря склада уменьшают предел, но уже накопленное не исчезает. Новая разгрузка ждёт освобождения места.")
+	for building in state.data.buildings:
+		if building.id not in ["hq","warehouse"]:continue
+		var uid=int(building.uid)
+		sidebar.add_child(_button("%s · %d,%d · %s"%[state.catalog.building(building.id).name,building.x,building.y,"ур. "+str(building.level) if building.built else "стройка"],_inspect_building.bind(uid)))
+	_update_live()
+
+func _inspect_building(uid:int):
+	selected_building_uid=uid;tab="build";placement="";selected_source=-1;_refresh()
 
 func _open_main_menu():
 	if start_menu==null:return
@@ -517,6 +591,7 @@ func _activate_party(next):
 	combat.running=false;combat.hide();base.show();result_dialog.hide();retreat_dialog.hide()
 	in_battle=false;benchmark_mode=false;session_started=true;autosave_clock=0;tab="build"
 	selected_building=-1;selected_building_uid=-1;selected_source=-1;placement="";base.zoom=1.0;base.pan=Vector2.ZERO
+	base.command_group="hero"
 	start_menu.hide();_refresh()
 	if state.save_progress():
 		if not profiles.remember(state.save_path):_notice("Партия сохранена, но последнюю выбранную партию запомнить не удалось.")

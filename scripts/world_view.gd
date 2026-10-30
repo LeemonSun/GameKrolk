@@ -5,6 +5,8 @@ signal order_requested(group:String,pos:Vector2)
 const Art=preload("res://scripts/art.gd")
 const WorldData=preload("res://scripts/world_data.gd")
 const Settlement=preload("res://scripts/settlement.gd")
+const Palette=preload("res://scripts/palette.gd")
+var show_orders=false
 var state
 var world
 var selected=-1
@@ -77,13 +79,15 @@ func _draw():
 		var b=state.data.buildings[i]
 		var area=Rect2(rect.position+Vector2(b.x,b.y)*cell,Vector2(b.width,b.height)*cell)
 		var center=area.get_center()
-		if b.built:Art.building(self,center,b.id,int(b.level),false,minf(area.size.x,area.size.y)/70.0)
+		if b.built:Art.building(self,center,b.id,int(b.level),false,minf(area.size.x,area.size.y)/70.0,b.get("gate_open",false))
 		else:
 			draw_rect(area.grow(-2),Color("514c37"));draw_rect(area.grow(-2),Color("bd9d65"),false,2)
 			draw_line(area.position+Vector2(4,4),area.end-Vector2(4,4),Color("9c8255"),3*factor)
 			draw_line(area.position+Vector2(area.size.x-4,4),area.position+Vector2(4,area.size.y-4),Color("9c8255"),3*factor)
 		if i==selected:draw_rect(area.grow(-1),Color("e0bf7e"),false,2)
-		if world!=null and world.needs_work(b):
+		if not b.get("repair",{}).is_empty():
+			draw_rect(Rect2(area.position+Vector2(2,area.size.y-6),Vector2((area.size.x-4)*(1.0-b.repair.remaining/b.repair.total),4)),Color("d5d8cd"))
+		elif world!=null and world.needs_work(b):
 			draw_rect(Rect2(area.position+Vector2(2,area.size.y-6),Vector2(area.size.x-4,4)),Color("28342b"))
 			draw_rect(Rect2(area.position+Vector2(2,area.size.y-6),Vector2((area.size.x-4)*b.work_done/world.required_work(b),4)),Color("d0bd84"))
 		elif b.hp<state.catalog.building(b.id).hp*b.level:
@@ -94,6 +98,7 @@ func _draw():
 		Art.person(self,p,"militia",0,clock*8 if w.job!="idle" else 0,Vector2.RIGHT,0,0,Color.WHITE,false,factor*0.85)
 		if w.carry>0:draw_rect(Rect2(p+Vector2(4,-13)*factor,Vector2(6,7)*factor),Color("bd9c63") if w.carry_kind=="wood" else (Color("a7c57b") if w.carry_kind=="food" else Color("acb9ad")))
 	if world!=null:
+		if show_orders:_draw_orders(rect,factor)
 		for trace in world.battle.traces:draw_line(rect.position+trace.a*factor,rect.position+trace.b*factor,Color(0.96,0.6,0.64,0.25),maxf(1,factor*2))
 		var ordered=world.battle.units.duplicate();ordered.sort_custom(func(a,b):return a.pos.y<b.pos.y)
 		var hero_color=Color(state.catalog.hero(state.data.selected_hero).color)
@@ -128,4 +133,25 @@ func _draw():
 			draw_rect(area,Color(color,0.25));draw_rect(area,color,false,2)
 			var hint="ЛКМ — заложить · "+str(int(def.width))+"×"+str(int(def.height)) if reason.is_empty() else reason
 			draw_string(ThemeDB.fallback_font,Vector2(18,28),hint,HORIZONTAL_ALIGNMENT_LEFT,size.x-30,14,color)
-	draw_string(ThemeDB.fallback_font,Vector2(18,size.y-16),"Колесо — масштаб · средняя кнопка — камера · ПКМ — приказ · P — пауза · Пробел — техника",HORIZONTAL_ALIGNMENT_LEFT,-1,12,Color("c1c9b2"))
+	var controls="ПКМ — приказ · H — держать позицию · S — отменить маршрут · P — пауза" if show_orders else "Колесо — масштаб · средняя кнопка — камера · ПКМ — приказ · P — пауза · Пробел — техника"
+	draw_string(ThemeDB.fallback_font,Vector2(18,size.y-16),controls,HORIZONTAL_ALIGNMENT_LEFT,-1,12,Palette.MUTED)
+
+func _draw_orders(rect:Rect2,factor:float):
+	var visible_paths=0;var count=0
+	for unit in world.battle.units:
+		if unit.team!=0 or unit.hp<=0 or (command_group!="all" and unit.kind!=command_group):continue
+		count+=1;var position=rect.position+unit.pos*factor
+		draw_arc(position,12*factor,0,TAU,20,Color(Palette.ACCENT,0.65),maxf(1,factor))
+		if unit.goal==Vector2.INF:continue
+		var goal=rect.position+unit.goal*factor
+		draw_rect(Rect2(goal-Vector2.ONE*4,Vector2.ONE*8),Color(Palette.ACCENT,0.7),false,1)
+		if unit.route_blocked:
+			draw_line(goal-Vector2(5,5),goal+Vector2(5,5),Palette.ACCENT,1)
+			draw_line(goal-Vector2(-5,5),goal+Vector2(-5,5),Palette.ACCENT,1)
+		elif visible_paths<5:
+			var points=PackedVector2Array([position])
+			for point in unit.path:points.append(rect.position+point*factor)
+			if points.size()>1:draw_polyline(points,Color(Palette.ACCENT,0.25),1,true)
+			visible_paths+=1
+	var title={"all":"Все бойцы","hero":"Герой","militia":"Мечники","archer":"Лучники","guard":"Стражи"}.get(command_group,"Бойцы")
+	draw_string(ThemeDB.fallback_font,Vector2(18,26),title+" · "+str(count),HORIZONTAL_ALIGNMENT_LEFT,-1,14,Palette.INK)

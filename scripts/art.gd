@@ -33,12 +33,28 @@ static func person(c:CanvasItem,p:Vector2,kind:String,team:int,phase:float,facin
 		c.draw_rect(Rect2(-12,-14,8,16),main.darkened(0.3));c.draw_rect(Rect2(-10,-12,4,12),main.lightened(0.2))
 	c.draw_set_transform(Vector2.ZERO)
 
-static func building(c:CanvasItem,p:Vector2,id:String,level:int,selected:bool=false,zoom:float=1.0):
+static func building(c:CanvasItem,p:Vector2,id:String,level:int,selected:bool=false,zoom:float=1.0,gate_open:bool=false):
 	c.draw_set_transform(p,0,Vector2.ONE*zoom)
 	var gold=Color("cfb57b")
 	if selected:c.draw_rect(Rect2(-33,-34,66,70),Color(0.85,0.73,0.45,0.2));c.draw_rect(Rect2(-33,-34,66,70),gold,false,2)
 	c.draw_rect(Rect2(-28,12,63,20),Color(0.04,0.06,0.04,0.4))
-	if id=="farm":
+	if id=="gate":
+		c.draw_rect(Rect2(-28,-25,11,53),Color("8b918c"));c.draw_rect(Rect2(17,-25,11,53),Color("8b918c"))
+		c.draw_rect(Rect2(-28,-29,56,8),Color("b5b8ac"))
+		if gate_open:
+			c.draw_rect(Rect2(-17,-18,5,43),Color("515951"));c.draw_rect(Rect2(12,-18,5,43),Color("515951"))
+		else:
+			c.draw_rect(Rect2(-17,-18,34,43),Color("586253"))
+			for x in [-12,-4,4,12]:c.draw_line(Vector2(x,-17),Vector2(x,24),Color("a0a793"),2)
+			c.draw_line(Vector2(-16,5),Vector2(16,5),Color("252c28"),5)
+	elif id=="warehouse":
+		c.draw_rect(Rect2(-30,-15,60,43),Color("929783"))
+		c.draw_colored_polygon(PackedVector2Array([Vector2(-34,-15),Vector2(-24,-31),Vector2(24,-31),Vector2(34,-15)]),Color("495d55"))
+		c.draw_rect(Rect2(-13,-10,26,37),Color("2e3931"))
+		for x in [-27,17]:
+			c.draw_rect(Rect2(x,9,12,18),Color("a88a5b"));c.draw_line(Vector2(x,12),Vector2(x+12,24),Color("625e45"),2)
+		c.draw_line(Vector2(-13,-5),Vector2(13,-5),Color("b8b99e"),2)
+	elif id=="farm":
 		c.draw_rect(Rect2(-30,-28,60,58),Color("675e3c"))
 		for row in 5:
 			c.draw_line(Vector2(-26,-22+row*10),Vector2(26,-22+row*10),Color("967947"),3)

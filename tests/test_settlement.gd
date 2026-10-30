@@ -84,6 +84,9 @@ func run():
 	check(s.data.buildings[house_index].level==2 and s.worker_capacity()==7,"worker finishes upgrade and capacity changes once")
 	before=s.data.duplicate(true);s.demolish(house_index)
 	check(s.data==before,"occupied housing cannot be demolished into homelessness")
+	# This checks delivery, not overflow: leave room after the earlier rich
+	# construction fixture. Full-storage behavior has its own logistics tests.
+	s.data.wood=100
 	var courier=s.data.world.workers[1];courier.job="manual";courier.source=-1;courier.carry=2;courier.carry_kind="wood";courier.x=world.home().x/32;courier.y=world.home().y/32
 	var stock=int(s.data.wood);world.set_preference(1,"rest");world.step(1.0/30.0)
 	check(s.data.wood==stock+2 and courier.job=="idle" and courier.carry==0,"reassignment preserves and delivers partial cargo exactly once")
@@ -92,7 +95,7 @@ func run():
 	var site=s.data.buildings[-1];advance(world,1)
 	check(not site.built and s.save_progress(),"save partially completed construction")
 	var loaded=State.new(s.save_path)
-	check(loaded.load_progress() and Assertions.same(loaded.data,s.data),"version 3 save roundtrip includes workers, meals, goals and stable identities")
+	check(loaded.load_progress() and Assertions.same(loaded.data,s.data),"save roundtrip includes workers, meals, goals and stable identities: "+Assertions.first_difference(s.data,loaded.data))
 	var restored=World.new(loaded);var saved_site=loaded.building_uid(int(site.uid))
 	check(is_equal_approx(saved_site.work_done,site.work_done),"construction progress survives reload")
 	advance(restored,15)

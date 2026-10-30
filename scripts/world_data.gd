@@ -1,4 +1,5 @@
 extends RefCounted
+const Snapshot=preload("res://scripts/combat_snapshot.gd")
 
 const WIDTH=32
 const HEIGHT=22
@@ -40,7 +41,7 @@ static func valid(value:Variant)->bool:
 		if not s is Dictionary:return false
 		for key in ["id","x","y","amount"]:
 			if not number(s.get(key)):return false
-		if s.x<0 or s.x>=WIDTH or s.y<0 or s.y>=HEIGHT or s.amount<0 or s.amount>10000 or s.id<0:return false
+		if s.x<0 or s.x>=WIDTH or s.y<0 or s.y>=HEIGHT or s.amount<0 or s.amount>10000 or s.id<0 or s.id>1e9:return false
 		if s.get("kind") not in ["wood","stone"] or ids.has(int(s.id)):return false
 		ids[int(s.id)]=true
 		var cell=Vector2i(int(s.x),int(s.y))
@@ -68,12 +69,13 @@ static func valid(value:Variant)->bool:
 			if not u is Dictionary or u.get("kind") not in ["hero","militia","archer","guard"]:return false
 			for key in ["team","x","y","hp","max_hp","damage","speed","reach","cooldown","rank"]:
 				if not number(u.get(key)) or u[key]<0 or u[key]>10000000:return false
-			if int(u.team) not in [0,1] or float(u.team)!=int(u.team) or u.x>=WIDTH*TILE or u.y>=HEIGHT*TILE or u.hp>u.max_hp or u.max_hp<=0 or u.cooldown<=0:return false
+			if int(u.team) not in [0,1] or float(u.team)!=int(u.team) or u.x>=WIDTH*TILE or u.y>=HEIGHT*TILE or u.hp>u.max_hp or u.max_hp<=0 or u.cooldown<=0 or u.reach>4096 or u.speed>2000:return false
 			if u.has("uid"):
-				if not number(u.uid) or u.uid<0 or float(u.uid)!=int(u.uid) or combat_ids.has(int(u.uid)):return false
+				if not number(u.uid) or u.uid<0 or u.uid>1e12 or float(u.uid)!=int(u.uid) or combat_ids.has(int(u.uid)):return false
 				combat_ids[int(u.uid)]=true;maximum_uid=maxi(maximum_uid,int(u.uid))
 		if combat.has("next_uid"):
-			if not number(combat.next_uid) or float(combat.next_uid)!=int(combat.next_uid) or combat.next_uid<=maximum_uid:return false
+			if not number(combat.next_uid) or combat.next_uid>1e12 or float(combat.next_uid)!=int(combat.next_uid) or combat.next_uid<=maximum_uid:return false
+		if combat.has("complete") and not Snapshot.valid(combat,value.workers):return false
 	return value.get("raid_active") is bool
 
 static func number(v:Variant)->bool:return (v is int or v is float) and is_finite(float(v))

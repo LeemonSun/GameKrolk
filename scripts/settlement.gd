@@ -24,6 +24,8 @@ static func initialize(data:Dictionary,catalog):
 		if not b.has("height"):b.height=1
 		if not b.has("paid_wood"):b.paid_wood=0
 		if not b.has("paid_stone"):b.paid_stone=0
+		if not b.has("gate_open"):b.gate_open=false
+		if not b.has("repair"):b.repair={}
 	data["next_building_uid"]=maxi(next,int(data.get("next_building_uid",1)))
 	data["construction_first"]=data.get("construction_first",true)
 	data["achieved"]=data.get("achieved",[])
@@ -34,6 +36,7 @@ static func initialize(data:Dictionary,catalog):
 		if not w.has("preference"):w.preference="auto"
 		if not w.has("workplace"):w.workplace=0
 		if not w.has("returning"):w.returning=false
+		if not w.has("depot"):w.depot=0
 	if not data.research.has("agriculture"):data.research.agriculture=false
 	var combat=data.world.get("combat",{})
 	if not combat.is_empty():
@@ -63,6 +66,15 @@ static func valid(data:Dictionary,catalog)->bool:
 		if b.uid<=0 or ids.has(int(b.uid)) or b.width<1 or b.width>2 or b.height<1 or b.height>2 or b.paid_wood<0 or b.paid_stone<0:return false
 		ids[int(b.uid)]=true;maximum=maxi(maximum,int(b.uid))
 		if not b.get("built") is bool or not number(b.get("work_done")) or not number(b.get("hp")):return false
+		if not b.get("gate_open") is bool or (b.gate_open and (b.id!="gate" or not b.built)):return false
+		if not b.get("repair") is Dictionary:return false
+		if not b.repair.is_empty():
+			if not b.built or b.target_level!=b.level or b.repair.size()!=5:return false
+			for key in ["remaining","total","rate"]:
+				if not number(b.repair.get(key)) or b.repair[key]<=0 or b.repair[key]>10000:return false
+			if b.repair.remaining>b.repair.total:return false
+			for key in ["wood","stone"]:
+				if not integer(b.repair.get(key)) or b.repair[key]<0 or b.repair[key]>100000:return false
 		if b.target_level<b.level or b.target_level>3:return false
 		if b.work_done<0 or b.work_done>catalog.building(b.id).work*3+0.01 or b.hp<=0 or b.hp>catalog.building(b.id).hp*3:return false
 		for x in range(int(b.x),int(b.x+b.width)):
@@ -77,6 +89,7 @@ static func valid(data:Dictionary,catalog)->bool:
 		worker_ids[int(w.id)]=true
 		if not w.get("name") is String or w.name.length()>40 or w.get("preference") not in PREFERENCES:return false
 		if not integer(w.get("workplace")) or w.workplace<0 or not w.get("returning") is bool:return false
+		if not integer(w.get("depot")) or w.depot<0 or w.depot>10000000:return false
 	return number(data.world.get("food_clock")) and data.world.food_clock>=0 and data.world.food_clock<60.01
 
 static func number(v:Variant)->bool:return (v is int or v is float) and is_finite(float(v))
