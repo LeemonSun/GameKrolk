@@ -1,36 +1,68 @@
 extends RefCounted
 
+# Original procedural sprites: cached body textures, independently animated
+# equipment. The cache is bounded by catalog profiles and five body frames.
+static var bodies:Dictionary={}
+
+static func _body(kind:String,team:int,main:Color,frame:int)->Texture2D:
+	var key=kind+str(team)+main.to_html(false)+str(frame)
+	if bodies.has(key):return bodies[key]
+	var dark="#"+main.darkened(0.52).to_html(false)
+	var cloth="#"+main.darkened(0.22).to_html(false)
+	var plate="#"+main.lightened(0.12).to_html(false)
+	var edge="#"+main.lightened(0.36).to_html(false)
+	var leg=2 if frame==1 else (-2 if frame==2 else 0)
+	var torso='<path d="M8 18 L23 18 L26 36 L5 36 Z" fill="'+cloth+'" stroke="'+dark+'"/>'
+	if kind=="hero":torso='<path d="M7 14 L24 14 L29 40 L3 39 Z" fill="'+dark+'"/>'+torso
+	var helmet='<path d="M9 8 Q16 3 23 8 L23 16 L9 16Z" fill="'+plate+'" stroke="'+dark+'"/><path d="M10 11L22 11L21 14L11 14Z" fill="#23282a"/>'
+	if kind=="archer":helmet='<path d="M7 15 Q8 1 16 2 Q24 4 25 16L21 18L11 18Z" fill="'+cloth+'" stroke="'+dark+'"/><path d="M12 8L20 8L21 15L12 15Z" fill="#bcb2a0"/><path d="M11 13L22 13" stroke="'+dark+'" stroke-width="2"/>'
+	elif kind=="worker":helmet='<path d="M9 9L22 9L22 17L10 17Z" fill="#bcb2a0"/><path d="M7 8L24 8L22 4L10 4Z" fill="'+cloth+'" stroke="'+dark+'"/>'
+	elif kind=="hero":helmet='<path d="M8 7L24 7L23 17L9 17Z" fill="'+edge+'" stroke="'+dark+'"/><path d="M10 12L22 12" stroke="#25282b" stroke-width="2"/><path d="M5 6L27 6L21 2L10 2Z" fill="'+dark+'"/>'
+	var details='<path d="M10 20L22 20L21 29L11 29Z" fill="'+plate+'"/><path d="M16 20L16 29M11 24L21 24" stroke="'+edge+'"/><path d="M7 31L24 31" stroke="'+dark+'" stroke-width="3"/><path d="M14 30L18 30L18 33L14 33Z" fill="#b9b4a0"/>'
+	if kind=="worker":details='<path d="M11 19L21 19L23 34L9 34Z" fill="'+dark+'"/><path d="M12 21L20 21L20 27L12 27Z" fill="'+cloth+'"/>'
+	var legs='<path d="M9 33L14 33L14 '+str(43+leg)+'L8 '+str(43+leg)+'Z" fill="'+dark+'"/><path d="M18 33L23 33L24 '+str(43-leg)+'L18 '+str(43-leg)+'Z" fill="'+dark+'"/><path d="M7 '+str(44+leg)+'L14 '+str(44+leg)+'M18 '+str(44-leg)+'L25 '+str(44-leg)+'" stroke="#323538" stroke-width="3"/>'
+	var content='<ellipse cx="16" cy="44" rx="14" ry="4" fill="#090b0c" opacity=".4"/>'+legs+torso+details+helmet
+	if frame==4:content='<ellipse cx="16" cy="43" rx="15" ry="4" fill="#090b0c" opacity=".4"/><path d="M2 39L24 38L28 43L5 45Z" fill="'+cloth+'" stroke="'+dark+'"/><path d="M23 35L30 37L29 43L22 42Z" fill="'+plate+'"/>'
+	var svg='<svg xmlns="http://www.w3.org/2000/svg" width="32" height="48" viewBox="0 0 32 48">'+content+'</svg>'
+	var bitmap=Image.new()
+	if bitmap.load_svg_from_string(svg)!=OK:return null
+	var texture=ImageTexture.create_from_image(bitmap);bodies[key]=texture;return texture
+
 static func person(c:CanvasItem,p:Vector2,kind:String,team:int,phase:float,facing:Vector2,attack:float,flash:float,hero_color:Color=Color.WHITE,dead:bool=false,zoom:float=1.0):
-	var hero=kind=="hero";var scale=1.35 if hero else 0.85
-	var main=hero_color if hero else (Color("a7bfc0") if team==0 else Color("aa6256"))
-	if kind=="guard":main=Color("b7a879") if team==0 else Color("b48a68")
-	if kind=="archer":main=Color("829e88") if team==0 else Color("9d8466")
-	if flash>0:main=Color("fff1c5")
-	c.draw_set_transform(p,0,Vector2.ONE*scale*zoom)
-	if dead:
-		c.draw_rect(Rect2(-8,-2,17,5),main.darkened(0.4));c.draw_rect(Rect2(6,-4,5,5),Color("ad9a83"));c.draw_set_transform(Vector2.ZERO);return
-	c.draw_rect(Rect2(-10,0,21,8),Color(0.025,0.035,0.03,0.4))
-	var walk=sin(phase)*3
-	c.draw_rect(Rect2(-6,0+walk,5,7),Color("27332f"));c.draw_rect(Rect2(2,0-walk,5,7),Color("27332f"))
-	if hero:c.draw_colored_polygon(PackedVector2Array([Vector2(-9,-15),Vector2(8,-15),Vector2(11,5),Vector2(-12,4)]),main.darkened(0.25))
-	c.draw_rect(Rect2(-7,-13,14,15),main.darkened(0.1));c.draw_rect(Rect2(-6,-12,12,4),main.lightened(0.12))
-	c.draw_rect(Rect2(-4,-21,9,9),Color("cfb999"));c.draw_rect(Rect2(-5,-23,11,5),main.lightened(0.1))
-	if hero:
-		c.draw_rect(Rect2(-6,-26,14,4),Color("252b2c"));c.draw_rect(Rect2(-3,-29,9,4),Color("252b2c"))
-	elif kind=="guard":c.draw_rect(Rect2(-4,-16,9,3),Color("60695f"))
-	var dir=facing.normalized();var arm=Vector2(5,-9)+dir*5
-	c.draw_line(Vector2(4,-10),arm,main.lightened(0.2),4)
+	var hero=kind=="hero";var scale=1.2 if hero else 0.78
+	var main=hero_color if hero else (Color("a5b5b6") if team==0 else Color("a7766b"))
+	if kind=="guard":main=Color("b4b4a6") if team==0 else Color("b48d77")
+	elif kind=="archer":main=Color("899a8f") if team==0 else Color("9e897d")
+	elif kind=="worker":main=Color("9c9788")
+	var frame=4 if dead else (1 if sin(phase)>0.3 else (2 if sin(phase)< -0.3 else 0))
+	var texture=_body(kind,team,main,frame)
+	var bob=-absf(sin(phase))*0.7 if not dead else 0.0
+	c.draw_set_transform(p+Vector2(0,bob*zoom),0,Vector2.ONE*scale*zoom)
+	if texture!=null:c.draw_texture(texture,Vector2(-16,-42),Color(1.6,1.6,1.6) if flash>0 else Color.WHITE)
+	if dead:c.draw_set_transform(Vector2.ZERO);return
+	var dir=facing.normalized();var hand=Vector2(5,-17)+dir*5
+	c.draw_line(Vector2(5,-19),hand,main.lightened(0.25),4)
 	if kind=="archer":
-		c.draw_arc(arm,9,dir.angle()-1.2,dir.angle()+1.2,8,Color("dbc197"),2)
+		var angle=dir.angle()
+		c.draw_arc(hand,11,angle-1.3,angle+1.3,10,Color("b9b09a"),2)
+		c.draw_line(hand+dir.rotated(-1.3)*11,hand-dir*attack*5,Color("c8cbca"),1)
+		c.draw_line(hand-dir*attack*5,hand+dir.rotated(1.3)*11,Color("c8cbca"),1)
+		if attack>0:c.draw_line(hand-dir*6,hand+dir*16,Color("dddcd1"),1.5)
+	elif kind=="worker":
+		var tool=Vector2(6,-12)+dir*4
+		c.draw_line(tool,tool+dir.rotated(-0.4)*19,Color("857b67"),2.5)
+		c.draw_line(tool+dir.rotated(-0.4)*17-dir.orthogonal()*5,tool+dir.rotated(-0.4)*17+dir.orthogonal()*5,Color("b5b9b4"),3)
 	else:
-		var swing=dir.rotated((-0.9+attack*2.0) if attack>0 else -0.2)
-		var end=arm+swing*(24 if hero else 17)
-		c.draw_line(arm,end,Color("e3dfc4"),3 if hero else 2)
-		c.draw_line(arm-dir.orthogonal()*4,arm+dir.orthogonal()*4,Color("a68c5c"),2)
-		if attack>0.05:
-			c.draw_arc(arm,24 if hero else 17,dir.angle()-0.95,dir.angle()+attack*1.2,12,Color(1,0.9,0.67,0.55),3)
+		var swing=dir.rotated(-0.6+attack*1.8 if attack>0 else -0.25)
+		var tip=hand+swing*(28 if hero else 22)
+		c.draw_line(hand,tip,Color("d9dcda"),3 if hero else 2)
+		c.draw_line(hand-swing*3,hand,Color("8a806b"),3)
+		c.draw_line(hand-dir.orthogonal()*4,hand+dir.orthogonal()*4,Color("ada58e"),2)
+		if attack>0.05:c.draw_arc(hand,28 if hero else 22,dir.angle()-0.8,dir.angle()+attack*1.1,12,Color(0.9,0.93,0.92,0.48),2)
 	if kind=="guard":
-		c.draw_rect(Rect2(-12,-14,8,16),main.darkened(0.3));c.draw_rect(Rect2(-10,-12,4,12),main.lightened(0.2))
+		c.draw_colored_polygon(PackedVector2Array([Vector2(-15,-25),Vector2(-4,-25),Vector2(-3,-9),Vector2(-10,-4),Vector2(-16,-10)]),main.darkened(0.35))
+		c.draw_polyline(PackedVector2Array([Vector2(-15,-25),Vector2(-4,-25),Vector2(-3,-9),Vector2(-10,-4),Vector2(-16,-10),Vector2(-15,-25)]),main.lightened(0.35),1.5)
+		c.draw_line(Vector2(-10,-22),Vector2(-10,-9),Color("d5d3c4"),1)
 	c.draw_set_transform(Vector2.ZERO)
 
 static func building(c:CanvasItem,p:Vector2,id:String,level:int,selected:bool=false,zoom:float=1.0,gate_open:bool=false):
@@ -81,6 +113,10 @@ static func building(c:CanvasItem,p:Vector2,id:String,level:int,selected:bool=fa
 			c.draw_rect(Rect2(14,-34,10,22),Color("787969"));c.draw_rect(Rect2(-18,12,11,10),Color("efad65"))
 		elif id=="lab":
 			c.draw_circle(Vector2(1,-15),8,Color("8cd2b4"));c.draw_line(Vector2(1,-27),Vector2(1,-20),Color("cce4c8"),4)
+		elif id=="infirmary":
+			c.draw_rect(Rect2(-12,-24,24,17),Color("dadcd4"))
+			c.draw_line(Vector2(0,-22),Vector2(0,-9),Color("30393a"),4)
+			c.draw_line(Vector2(-7,-16),Vector2(7,-16),Color("30393a"),4)
 		elif id=="barracks":
 			c.draw_line(Vector2(-14,-24),Vector2(14,-5),gold,3);c.draw_line(Vector2(14,-24),Vector2(-14,-5),gold,3)
 		elif id=="lumber":

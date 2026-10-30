@@ -39,10 +39,14 @@ func run():
 	var bad=s.data.duplicate(true);bad.army.militia=-1;check(not s._valid(bad),"reject negative army")
 	bad=s.data.duplicate(true);bad.buildings.append(bad.buildings[0].duplicate());check(not s._valid(bad),"reject overlapping saved buildings")
 	s.data.coins=0;before=s.data.duplicate(true);s.recruit("militia");check(s.data==before,"recruit cannot overdraw")
-	s.data.coins=100;s.data.officers.commander=true;s.data.auto_recruit=true;s.data.army.militia=4
+	s.data.coins=100;s.assign("commander",0);s.data.auto_recruit=true;s.data.army.militia=4
+	s.data.world.workers[0].at_post=true
 	var automation=s.automate();check(automation.recruited==8 and s.data.coins==44,"commander purchases missing soldiers at normal price")
 	check(s.automate().spent==0,"automation is idempotent at target")
-	s.data.officers.quartermaster=true;s.data.auto_supply=true;s.data.food=10
+	# The supply appointment needs the upgraded HQ and a real free person.
+	s.data.buildings[0].level=2;s.data.buildings[0].target_level=2
+	s.assign("quartermaster",1);s.data.auto_supply=true;s.data.food=10
+	s.data.world.workers[1].at_post=true
 	check(s.automate().food==2 and s.data.coins==36,"quartermaster uses actual money")
 	check(s.begin_siege().is_empty(),"begin siege commits provision")
 	check(s.data.food==9 and s.data.in_flight,"provision and pending flag")

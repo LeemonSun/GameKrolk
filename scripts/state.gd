@@ -7,7 +7,8 @@ const WorldRules=preload("res://scripts/world_rules.gd")
 const Snapshot=preload("res://scripts/combat_snapshot.gd")
 const Logistics=preload("res://scripts/logistics.gd")
 const Commerce=preload("res://scripts/commerce.gd")
-const SAVE_VERSION=6
+const Personnel=preload("res://scripts/personnel.gd")
+const SAVE_VERSION=7
 var catalog=Catalog.new()
 var save_path="user://progress.json"
 var data:Dictionary={}
@@ -30,11 +31,14 @@ func reset():
 		b.width=int(catalog.building(b.id).width);b.height=int(catalog.building(b.id).height)
 	Settlement.initialize(data,catalog)
 	Commerce.initialize(data)
+	Personnel.initialize(data)
 	data["rules"]={"threat":"standard"}
 
 func new_game(seed_value:int,threat:String,title:String)->bool:
 	if seed_value<1 or seed_value>2147483647 or threat not in WorldRules.MODES or title.strip_edges().length()>40:return false
 	reset();data.world=WorldData.generate(seed_value);Settlement.initialize(data,catalog)
+	Personnel.initialize(data)
+	data.selected_hero="warden"
 	data.rules.threat=threat;data.world.raid_in=WorldRules.MODES[threat].first
 	data["profile"]={"name":title.strip_edges() if not title.strip_edges().is_empty() else "Новое поселение","created":Time.get_unix_time_from_system()}
 	return true
@@ -83,7 +87,7 @@ func _valid(d:Variant)->bool:
 		if not combat.has("complete") and combat.get("legacy",false)!=true:return false
 		for unit in combat.units:
 			if not unit.has("uid"):return false
-	return Settlement.valid(d,catalog) and Commerce.valid(d)
+	return Settlement.valid(d,catalog) and Commerce.valid(d) and Personnel.valid(d)
 
 func load_progress()->bool:
 	if not FileAccess.file_exists(save_path) and not FileAccess.file_exists(save_path+".bak"):return true
@@ -120,6 +124,7 @@ func _normalize():
 		for key in ["id","x","y","amount"]:source[key]=int(source[key])
 	for worker in data.world.workers:
 		for key in ["id","source","carry","workplace","depot"]:worker[key]=int(worker[key])
+		for skill in Personnel.SKILLS:worker.skills[skill]=int(worker.skills[skill]);worker.practice[skill]=int(worker.practice[skill])
 	for key in ["width","height","seed","raids_defeated","raid_number"]:data.world[key]=int(data.world[key])
 	for unit in data.world.get("combat",{}).get("units",[]):
 		for key in ["team","rank"]:unit[key]=int(unit[key])
@@ -128,10 +133,13 @@ func _normalize():
 	if data.world.get("combat",{}).has("complete"):Snapshot.normalize(data.world.combat)
 	data.next_building_uid=int(data.next_building_uid)
 	for key in ["orders","income","completed"]:data.commerce[key]=int(data.commerce[key])
+	for post in Personnel.POSTS:data.personnel.posts[post]=int(data.personnel.posts[post])
+	for kind in data.personnel.wounded:data.personnel.wounded[kind]=int(data.personnel.wounded[kind])
+	for key in ["treated","lost"]:data.personnel[key]=int(data.personnel[key])
 	for key in data.stats:data.stats[key]=int(data.stats[key])
 
 func _migrate(value:Variant)->Variant:
-	if not value is Dictionary or value.get("version") not in [1,1.0,2,2.0,3,3.0,4,4.0,5,5.0]:return value
+	if not value is Dictionary or value.get("version") not in [1,1.0,2,2.0,3,3.0,4,4.0,5,5.0,6,6.0]:return value
 	var migrated=value.duplicate(true)
 	if migrated.version==1:
 		migrated.wood=migrated.get("wood",migrated.get("materials",180));migrated.erase("materials")
@@ -145,6 +153,7 @@ func _migrate(value:Variant)->Variant:
 		if not b is Dictionary or not catalog.data.buildings.has(b.get("id","")) or not WorldData.number(b.get("level")):return null
 	migrated.version=SAVE_VERSION;Settlement.initialize(migrated,catalog)
 	Commerce.initialize(migrated)
+	Personnel.initialize(migrated)
 	if not migrated.world.get("combat",{}).is_empty() and not migrated.world.combat.has("complete"):migrated.world.combat["legacy"]=true
 	return migrated
 
@@ -186,7 +195,9 @@ func building_uid(uid:int)->Dictionary:
 	return {}
 
 func capacity()->int:
-	return 22+level("hq")*4+level("barracks")*6
+	var command=Personnel.holder(data,"commander")
+	var bonus=2*(int(command.skills.command)-1) if Personnel.ready(data,"commander") else 0
+	return 22+level("hq")*4+level("barracks")*6+bonus
 
 func army_count()->int:
 	var total=0
@@ -196,7 +207,7 @@ func army_count()->int:
 func hero_level(id:String)->int:return 1+int(data.xp[id])/60
 
 func hero_available(id:String)->bool:
-	return id=="astreya" or (id=="lina" and level("lab")>0) or (id=="warden" and level("hq")>=2)
+	return id in ["astreya","warden"] or (id=="lina" and level("lab")>0)
 
 func can_build(id:String,cell:Vector2i)->String:
 	if not catalog.data.buildings.has(id):return "Неизвестная постройка."
@@ -244,6 +255,7 @@ func hire_worker()->String:
 	for w in data.world.workers:uid=maxi(uid,int(w.id)+1)
 	data.coins-=40;data.food-=4
 	data.world.workers.append({"id":uid,"name":Settlement.NAMES[uid%Settlement.NAMES.size()],"x":17.0,"y":14.5,"job":"idle","source":-1,"carry":0,"carry_kind":"wood","progress":0.0,"preference":"auto","workplace":0,"returning":false,"depot":0})
+	Personnel.initialize_worker(data.world.workers[-1])
 	save_progress();return "Прибыл рабочий: "+data.world.workers[-1].name
 
 func demolish(index:int)->String:
@@ -264,6 +276,7 @@ func research(id:String)->String:
 	save_progress();return "Изучено: "+def.name
 
 func recruit(id:String)->String:
+	if data.world.raid_active:return "Пополнение доступно после нападения."
 	if not catalog.data.troops.has(id):return "Неизвестный тип бойца."
 	if id=="guard" and level("forge")==0:return "Для стражей нужна кузница."
 	if army_count()>=capacity():return "Армия заполнена. Улучшите Штаб или Казармы."
@@ -271,19 +284,35 @@ func recruit(id:String)->String:
 	if data.coins<cost:return "Недостаточно монет."
 	data.coins-=cost;data.army[id]+=1;save_progress();return "Нанят: "+catalog.troop(id).name
 
-func assign(id:String)->String:
-	if id not in data.officers:return "Неизвестная должность."
+func assign(id:String,person_id:int=-1)->String:
+	if id not in Personnel.POSTS:return "Неизвестная должность."
 	if id=="quartermaster" and level("hq")<2:return "Для второй должности нужен Штаб II."
-	data.officers[id]=not data.officers[id]
-	if not data.officers[id]:data["auto_recruit" if id=="commander" else "auto_supply"]=false
-	save_progress();return "Назначение обновлено."
+	if id=="medic" and level("infirmary")==0:return "Для лекаря нужен лазарет."
+	var previous=Personnel.holder(data,id)
+	if person_id<0 and not previous.is_empty():
+		previous.post="";previous.at_post=false;data.personnel.posts[id]=-1
+		if id in data.officers:data.officers[id]=false;data["auto_recruit" if id=="commander" else "auto_supply"]=false
+		save_progress();return previous.name+" освобождён от должности."
+	var person=Personnel.worker(data,person_id)
+	if person_id<0:
+		for candidate in data.world.workers:
+			if candidate.post.is_empty():person=candidate;break
+	if person.is_empty():return "Нет доступного человека для назначения."
+	if not person.post.is_empty() and person.post!=id:return "Человек уже занимает другую должность."
+	if not previous.is_empty():previous.post="";previous.at_post=false
+	person.post=id;person.at_post=false;data.personnel.posts[id]=int(person.id)
+	if person.carry>0:person.returning=true
+	else:person.job="idle";person.workplace=0;person.source=-1;person.progress=0.0
+	if id in data.officers:data.officers[id]=true
+	save_progress();return person.name+": "+Personnel.POSTS[id]+". Производственную работу больше не выполняет."
 
 func automate()->Dictionary:
 	var out={"recruited":0,"food":0,"spent":0}
-	if data.officers.quartermaster and data.auto_supply:
+	if data.world.raid_active:return out
+	if Personnel.ready(data,"quartermaster") and data.auto_supply:
 		while data.food<12 and data.coins>=4:
 			data.food+=1;data.coins-=4;out.food+=1;out.spent+=4
-	if data.officers.commander and data.auto_recruit:
+	if Personnel.ready(data,"commander") and data.auto_recruit:
 		while data.army.militia<12 and army_count()<capacity() and data.coins>=int(catalog.troop("militia").coins):
 			data.army.militia+=1;data.coins-=int(catalog.troop("militia").coins);out.recruited+=1;out.spent+=int(catalog.troop("militia").coins)
 	return out

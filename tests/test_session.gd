@@ -2,6 +2,7 @@ extends SceneTree
 const State=preload("res://scripts/state.gd")
 const World=preload("res://scripts/world.gd")
 const C=preload("res://scripts/commerce.gd")
+const P=preload("res://scripts/personnel.gd")
 var failures=0
 var checks=0
 func check(ok:bool,msg:String):
@@ -28,6 +29,9 @@ func manage(s,w):
 		if not s.data.research[tech]:s.research(tech)
 	for id in ["lumber","mine","farm","house","warehouse","forge"]:
 		if not place(s,w,id):break
+	if s.data.rules.threat=="harsh" and s.level("forge")>0:
+		place(s,w,"infirmary")
+		if s.level("infirmary")>0 and s.data.world.workers.size()>=5 and P.holder(s.data,"medic").is_empty():s.assign("medic",2);w._assign_jobs()
 	if s.data.world.workers.size()<5:s.hire_worker()
 	if s.level("hq")==1 and s.level("warehouse")>0 and s.data.coins>140:s.upgrade(0)
 	for id in ["food_export","wood_export","stone_export"]:
@@ -42,7 +46,7 @@ func manage(s,w):
 func run():
 	var reports=[]
 	for seed_value in [1,5,11]:
-		for mode in ["calm","standard"]:
+		for mode in ["calm","standard","harsh"]:
 			var s=State.new("res://work/session-%d-%s.json"%[seed_value,mode]);s.new_game(seed_value,mode,"Session");var w=World.new(s)
 			for tick in 36000:
 				if tick%60==0:manage(s,w)
@@ -57,7 +61,8 @@ func run():
 			check(s.data.commerce.orders>=3,"productive economy can fund itself through exports")
 			check(s.level("warehouse")>0 and s.level("forge")>0 and s.level("hq")>=2,"ordinary income funds storage, military production and HQ progression")
 			check(s.data.world.raid_number>=2,"session includes multiple real defenses")
-			reports.append({"seed":seed_value,"mode":mode,"workers":s.data.world.workers.size(),"exports":s.data.commerce.orders,"wins":s.data.world.raids_defeated,"losses":s.data.losses,"buildings":s.data.buildings.size(),"coins":s.data.coins})
+			if mode=="harsh":check(s.data.personnel.treated>0,"harsh session restores actual combat casualties through assigned medic")
+			reports.append({"seed":seed_value,"mode":mode,"workers":s.data.world.workers.size(),"exports":s.data.commerce.orders,"wins":s.data.world.raids_defeated,"losses":s.data.losses,"buildings":s.data.buildings.size(),"coins":s.data.coins,"treated":s.data.personnel.treated,"wounded":s.data.personnel.wounded})
 			print("SESSION_RUN "+JSON.stringify(reports[-1]))
 	# Transaction edge cases use their own state, not gifts in the session runs.
 	var s=State.new("res://work/trade-test.json");var w=World.new(s);var coins=int(s.data.coins);var wood=int(s.data.wood)

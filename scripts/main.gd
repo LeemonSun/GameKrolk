@@ -19,6 +19,7 @@ const BattleView=preload("res://scripts/battle_view.gd")
 const Palette=preload("res://scripts/palette.gd")
 const Logistics=preload("res://scripts/logistics.gd")
 const Commerce=preload("res://scripts/commerce.gd")
+const Personnel=preload("res://scripts/personnel.gd")
 const BG=Palette.BG
 const PANEL=Palette.PANEL
 const ACCENT=Palette.ACCENT
@@ -48,12 +49,13 @@ var retreat_dialog:ConfirmationDialog
 var ui_clock=0.0
 var benchmark_mode=false
 var selected_source=-1
+var selected_worker=-1
 var autosave_clock=0.0
 
 func _ready():
 	Engine.max_fps=60
 	var test_profile="user://progress.json"
-	var test_mode="--test-mode" in OS.get_cmdline_user_args()
+	var test_mode="--test-mode" in OS.get_cmdline_user_args() or "--ui-playtest" in OS.get_cmdline_user_args()
 	if test_mode:
 		test_profile="res://work/test-session-%d.json"%OS.get_process_id()
 		profiles=Profiles.new("res://work/profiles-%d"%OS.get_process_id(),test_profile)
@@ -68,7 +70,7 @@ func _ready():
 	if test_mode:session_started=true;start_menu.hide()
 	else:_open_main_menu()
 	if not state.warning.is_empty():_notice(state.warning,15)
-	print("GAMEKROLK_READY "+JSON.stringify({"version":"0.0.6","save":ProjectSettings.globalize_path(state.save_path),"renderer":RenderingServer.get_current_rendering_method()}))
+	print("GAMEKROLK_READY "+JSON.stringify({"version":"0.0.7","save":ProjectSettings.globalize_path(state.save_path),"renderer":RenderingServer.get_current_rendering_method()}))
 
 func _style(color:Color,border:Color=Color.TRANSPARENT,radius:int=10)->StyleBoxFlat:
 	var s=StyleBoxFlat.new();s.bg_color=color
@@ -99,7 +101,7 @@ func _setup_ui():
 	var header=HBoxContainer.new();root.add_child(header)
 	var brand=VBoxContainer.new();brand.size_flags_horizontal=Control.SIZE_EXPAND_FILL;brand.add_theme_constant_override("separation",1);header.add_child(brand)
 	title=_label("КРОЛИК  /  ЦИТАДЕЛЬ",29,ACCENT);brand.add_child(title)
-	subtitle=_label("ЖИВОЙ УЧАСТОК    ·    прототип 0.0.6    ·    хозяйство и оборона",12,MUTED);brand.add_child(subtitle)
+	subtitle=_label("ЖИВОЙ УЧАСТОК    ·    прототип 0.0.7    ·    хозяйство и оборона",12,MUTED);brand.add_child(subtitle)
 	header.add_child(_button("Сохранить",func():_notice("Прогресс сохранён." if state.save_progress() else state.warning)))
 	header.add_child(_button("Меню",_open_main_menu))
 	header.add_child(_button("Во весь экран  F11",_fullscreen))
@@ -131,7 +133,7 @@ func _refresh():
 	_update_resources();live_labels.clear();_clear(toolbar);_clear(sidebar)
 	if in_battle:_battle_ui();return
 	if not state.data.world.raid_active:world.sync_army()
-	for entry in [["build","Строить"],["people","Люди"],["logistics","Снабжение"],["trade","Поставки"],["goals","Рубежи"],["orders","Приказы"],["heroes","Герои"],["army","Армия"],["officers","Должности"],["tech","Технологии"]]:
+	for entry in [["build","Строить"],["people","Люди"],["logistics","Снабжение"],["trade","Поставки"],["goals","Рубежи"],["orders","Приказы"],["heroes","Герои"],["army","Армия"],["medical","Лазарет"],["officers","Должности"],["tech","Технологии"]]:
 		var b=_button(entry[1],_set_tab.bind(entry[0]),tab==entry[0]);toolbar.add_child(b)
 	var spacer=Control.new();spacer.size_flags_horizontal=Control.SIZE_EXPAND_FILL;toolbar.add_child(spacer)
 	toolbar.add_child(_button("Продолжить" if world.paused else "Пауза  P",_pause_world))
@@ -144,13 +146,14 @@ func _refresh():
 		"people":_people_ui()
 		"logistics":_logistics_ui()
 		"trade":_trade_ui()
+		"medical":_medical_ui()
 		"goals":_goals_ui()
 		"orders":_orders_ui()
 		"heroes":_heroes_ui()
 		"army":_army_ui()
 		"officers":_officers_ui()
 		"tech":_tech_ui()
-	base.selected=selected_building;base.selected_source=selected_source;base.placement=placement;base.show_orders=tab=="orders";base.queue_redraw()
+	base.selected=selected_building;base.selected_source=selected_source;base.selected_worker=selected_worker;base.placement=placement;base.show_orders=tab=="orders";base.queue_redraw()
 
 func _set_tab(value:String):
 	tab=value;placement="";base.placement="";_refresh()
@@ -169,7 +172,10 @@ func _build_ui():
 		var source=world._source(selected_source)
 		if not source.is_empty():
 			sidebar.add_child(_label(("Дерево" if source.kind=="wood" else "Месторождение")+" · осталось "+str(int(source.amount)),18,ACCENT))
-			sidebar.add_child(_button("Добывать до исчерпания",_gather_selected,true));_line()
+			var person=Personnel.worker(state.data,selected_worker)
+			sidebar.add_child(_button("Добывать до исчерпания" if person.is_empty() else "Поручить: "+person.name,_gather_selected,true))
+			if not person.is_empty():sidebar.add_child(_button("Выбрать любого свободного",func():selected_worker=-1;_refresh()))
+			_line()
 	if selected_building>=0 and selected_building<state.data.buildings.size():
 		var building=state.data.buildings[selected_building];var def=state.catalog.building(building.id)
 		_heading("%s · %s"%[def.name,"уровень "+str(building.level) if building.built else "стройка"])
@@ -191,7 +197,7 @@ func _build_ui():
 	elif placement.is_empty():_hint("Выберите здание на карте для улучшения. Новую стройку выполняет рабочий; размеры видны под курсором.")
 	if not placement.is_empty():_hint("Размещаете: "+state.catalog.building(placement).name+". ЛКМ — заложить, Esc — отменить.")
 	var grid=GridContainer.new();grid.columns=2;sidebar.add_child(grid)
-	for id in ["wall","gate","warehouse","house","lumber","mine","farm","barracks","forge","lab","hq"]:
+	for id in ["wall","gate","warehouse","house","lumber","mine","farm","infirmary","barracks","forge","lab","hq"]:
 		var def=state.catalog.building(id)
 		var button=_button("%s\n%d / %d / %d"%[def.name,def.coins,def.wood,def.stone],_place.bind(id),placement==id)
 		button.custom_minimum_size.y=62;button.size_flags_horizontal=Control.SIZE_EXPAND_FILL
@@ -202,7 +208,7 @@ func _build_ui():
 	_update_live()
 
 func _place(id:String):
-	placement=id;selected_building=-1;selected_building_uid=-1;selected_source=-1;_notice("Выберите свободную клетку для: "+state.catalog.building(id).name);_refresh()
+	placement=id;selected_building=-1;selected_building_uid=-1;selected_source=-1;selected_worker=-1;_notice("Выберите свободную клетку для: "+state.catalog.building(id).name);_refresh()
 
 func _base_click(cell:Vector2i):
 	if in_battle:return
@@ -211,7 +217,10 @@ func _base_click(cell:Vector2i):
 		selected_building=index;selected_building_uid=int(state.data.buildings[index].uid);selected_source=-1;placement="";_refresh();return
 	if placement.is_empty():
 		selected_building=-1;selected_building_uid=-1
+		for person in state.data.world.workers:
+			if Vector2i(floori(person.x),floori(person.y))==cell:selected_worker=int(person.id);selected_source=-1;tab="people";_refresh();return
 		var source=world.source_at(cell);selected_source=int(source.id) if not source.is_empty() else -1
+		if selected_source>=0:tab="build"
 		_refresh();return
 	var def=state.catalog.building(placement)
 	for x in range(cell.x,cell.x+int(def.width)):
@@ -224,7 +233,7 @@ func _base_click(cell:Vector2i):
 
 func _upgrade():_resolve_selected();_notice(state.upgrade(selected_building));_refresh()
 
-func _gather_selected():_notice(world.gather(selected_source));_refresh()
+func _gather_selected():_notice(world.gather(selected_source,selected_worker));_refresh()
 
 func _tech_ui():
 	_heading("Технологии поселения")
@@ -241,9 +250,11 @@ func _pause_world():world.paused=not world.paused;_refresh()
 func _trigger_raid():_notice(world.start_raid());_refresh()
 
 func _heroes_ui():
-	_heading("Герой вашего похода")
-	_hint("В этой первой сборке в бой выходит один выбранный герой. Остальные сохраняют свой опыт.")
-	for id in ["astreya","lina","warden"]:
+	_heading("Командир отряда")
+	var demonstration="--test-mode" in OS.get_cmdline_user_args() or "--developer" in OS.get_cmdline_user_args()
+	_hint("Именные капитаны принадлежат своим организациям. Их вступление в отряд требует отдельной системы отношений; обычная новая партия не выдаёт капитанов романа.")
+	if state.data.selected_hero!="warden" and not demonstration:_hint("В прежней партии сохранён демонстрационный герой: "+state.catalog.hero(state.data.selected_hero).name)
+	for id in (["warden","astreya","lina"] if demonstration else ["warden"]):
 		var def=state.catalog.hero(id);var available=state.hero_available(id)
 		var b=_button(("● " if state.data.selected_hero==id else "")+def.name+" · ур. "+str(state.hero_level(id)),_select_hero.bind(id),state.data.selected_hero==id)
 		b.disabled=not available;sidebar.add_child(b)
@@ -253,7 +264,7 @@ func _heroes_ui():
 			_hint(def.skill+": "+def.hint)
 			_hint("До следующего уровня: %d опыта."%[60-int(state.data.xp[id])%60])
 		_line()
-	_hint("Способности — тестовые игровые адаптации. Командир гарнизона — временный персонаж вне канона.")
+	_hint("Командир отряда — временный персонаж вне канона. В режиме разработчика доступны отдельные боевые адаптации Астреи и Лины.")
 
 func _select_hero(id:String):
 	if not state.hero_available(id):return
@@ -262,13 +273,16 @@ func _select_hero(id:String):
 
 func _army_ui():
 	_heading("Соберите свой полк")
+	_hint(state.data.personnel.last_report)
+	_hint("Половина выбывших бойцов каждого типа попадает в раненые с округлением вниз; остальные погибают. Лазарет позволяет вернуть раненых вместо нового найма.")
 	_hint("Бойцы защищают этот участок от набегов. Потери сохраняются; полигон служит отдельной тренировкой.")
 	for id in ["militia","archer","guard"]:
 		var def=state.catalog.troop(id)
 		sidebar.add_child(_label("%s  ·  %d в строю"%[def.name,state.data.army[id]],18))
+		_hint(def.get("role",""))
 		_hint("Здоровье %d · урон %d · %s"%[def.hp,def.damage,"дальний бой" if id=="archer" else "ближний бой"])
 		var b=_button("Нанять +1  ·  %d монет"%def.coins,_recruit.bind(id));b.disabled=id=="guard" and state.level("forge")==0;sidebar.add_child(b)
-		if b.disabled:_hint("Стражам требуется кузница.")
+		if b.disabled:_hint("Щитоносцам требуется кузница.")
 		_line()
 	_hint("Штаб и Казармы расширяют лимит армии. Кузница усиливает обычные атаки союзников.")
 
@@ -278,20 +292,36 @@ func _recruit(id:String):
 
 func _officers_ui():
 	_heading("Поручите людям работу")
-	_hint("Первые две должности проверяют делегирование. Это пока функциональные назначения без отдельных биографий слуг.")
-	for id in ["commander","quartermaster"]:
-		var assigned=bool(state.data.officers[id]);var command=id=="commander"
-		sidebar.add_child(_label("Командующий" if command else "Снабженец",19,ACCENT))
-		_hint("После осады пополняет мечников до 12, пока есть монеты и места." if command else "После осады покупает провиант до запаса 12. Цена: 4 монеты за единицу.")
-		var b=_button("Освободить должность" if assigned else "Назначить",_assign.bind(id));b.disabled=not command and state.level("hq")<2;sidebar.add_child(b)
-		if b.disabled:_hint("Вторая должность откроется на уровне Штаба II.")
-		var toggle=CheckButton.new();toggle.text="Разрешить автоматизацию";toggle.button_pressed=state.data.auto_recruit if command else state.data.auto_supply;toggle.disabled=not assigned
-		toggle.toggled.connect(_toggle_auto.bind("auto_recruit" if command else "auto_supply"));sidebar.add_child(toggle);_line()
+	_hint("Должность занимает конкретного жителя: он перестаёт работать на производстве. Если несёт груз, сначала доставит его и только затем начнёт службу.")
+	for id in Personnel.POSTS:
+		var person=Personnel.holder(state.data,id)
+		var locked=(id=="quartermaster" and state.level("hq")<2) or (id=="medic" and state.level("infirmary")==0)
+		sidebar.add_child(_label(Personnel.POSTS[id],19,ACCENT))
+		_hint({"commander":"Пополняет мечников до 12 за обычную цену. Навык командования увеличивает лимит армии на 2 за уровень выше первого.","quartermaster":"Покупает еду до запаса 12 за 4 монеты. Навык снабжения уменьшает расход еды армией: один паёк на 12 + 2 за уровень выше первого бойцов.","medic":"Лечит раненых в лазарете. Навык медицины ускоряет лечение. Оплата: 3 монеты и 2 провианта за бойца."}[id])
+		if not person.is_empty():
+			var post_status=_label("",14,MUTED);live_labels["post_"+id]=post_status;sidebar.add_child(post_status)
+			sidebar.add_child(_button("Освободить должность",_appoint.bind(id,-1)))
+		else:
+			var choice=OptionButton.new();choice.custom_minimum_size.y=40;choice.add_item("Выберите жителя…",-1)
+			choice.name="choice_"+id
+			var skill={"commander":"command","quartermaster":"logistics","medic":"medicine"}[id]
+			for candidate in state.data.world.workers:
+				if candidate.post.is_empty():choice.add_item("%s · навык %d"%[candidate.name,candidate.skills[skill]],int(candidate.id))
+			choice.disabled=locked;choice.item_selected.connect(func(index):
+				if index>0:_appoint(id,choice.get_item_id(index)))
+			sidebar.add_child(choice)
+		if locked:_hint("Нужен Штаб II." if id=="quartermaster" else "Нужен достроенный лазарет.")
+		if id in ["commander","quartermaster"]:
+			var toggle=CheckButton.new();toggle.text="Разрешить автоматизацию";toggle.button_pressed=state.data.auto_recruit if id=="commander" else state.data.auto_supply;toggle.disabled=person.is_empty()
+			toggle.toggled.connect(_toggle_auto.bind("auto_recruit" if id=="commander" else "auto_supply"));sidebar.add_child(toggle)
+		_line()
 	sidebar.add_child(_button("Купить 3 провианта · 12 монет",_buy_food))
 	sidebar.add_child(_button("Выполнить поручения сейчас",_run_automation))
 	_hint("Уже есть нужный запас — расхода не будет. Еда расходуется населением и армией каждую игровую минуту.")
+	_update_live()
 
 func _assign(id:String):_notice(state.assign(id));_refresh()
+func _appoint(post:String,id:int):_notice(state.assign(post,id));world._assign_jobs();state.save_progress();_refresh()
 func _toggle_auto(enabled:bool,key:String):state.data[key]=enabled;state.save_progress()
 
 func _buy_food():
@@ -299,6 +329,7 @@ func _buy_food():
 	state.data.coins-=12;state.data.food+=3;state.save_progress();_notice("Куплено 3 провианта.");_refresh()
 
 func _run_automation():
+	if state.data.world.raid_active:_notice("Поручения по пополнению выполняются после нападения.");return
 	var result=state.automate();state.save_progress();_notice("Поручения: нанято %d, провиант +%d, расход %d монет."%[result.recruited,result.food,result.spent]);_refresh()
 
 func _start_battle(kind:String):
@@ -332,7 +363,7 @@ func _battle_ui():
 	_hint(state.catalog.hero(state.data.selected_hero).hint)
 	var automatic=CheckButton.new();automatic.text="Применять технику автоматически";automatic.button_pressed=combat.automatic_skill;automatic.toggled.connect(func(value):combat.automatic_skill=value);sidebar.add_child(automatic)
 	_line();sidebar.add_child(_label("КОМУ ОТДАТЬ ПРИКАЗ",13,MUTED))
-	for item in [["all","Всем бойцам  ·  1"],["hero","Только герою  ·  2"],["militia","Мечникам  ·  3"],["archer","Лучникам  ·  4"],["guard","Стражам  ·  5"]]:
+	for item in [["all","Всем бойцам  ·  1"],["hero","Только герою  ·  2"],["militia","Мечникам  ·  3"],["archer","Лучникам  ·  4"],["guard","Щитоносцам  ·  5"]]:
 		sidebar.add_child(_button(item[1],_select_group.bind(item[0]),combat.group==item[0]))
 	_hint("Нажмите правой кнопкой на поле, чтобы задать направление. В контакте бойцы атакуют самостоятельно.")
 	if benchmark_mode:
@@ -424,13 +455,13 @@ func _unhandled_key_input(event):
 			KEY_2:_world_group("hero");_notice("Приказ получит только герой.")
 			KEY_3:_world_group("militia");_notice("Приказ получат мечники.")
 			KEY_4:_world_group("archer");_notice("Приказ получат лучники.")
-			KEY_5:_world_group("guard");_notice("Приказ получат стражи.")
+			KEY_5:_world_group("guard");_notice("Приказ получат щитоносцы.")
 
 func _orders_ui():
 	_heading("Управление бойцами")
 	_hint("Выберите группу и режим, затем укажите место правой кнопкой на карте. Приказы доступны на паузе.")
 	var grid=GridContainer.new();grid.columns=2;sidebar.add_child(grid)
-	for entry in [["all","Все"],["hero","Герой"],["militia","Мечники"],["archer","Лучники"],["guard","Стражи"]]:
+	for entry in [["all","Все"],["hero","Герой"],["militia","Мечники"],["archer","Лучники"],["guard","Щитоносцы"]]:
 		var button=_button(entry[1],_world_group.bind(entry[0]),base.command_group==entry[0]);button.size_flags_horizontal=Control.SIZE_EXPAND_FILL;grid.add_child(button)
 	_line()
 	sidebar.add_child(_button("Идти без остановки на бой",_world_mode.bind("move"),world.command_mode=="move"))
@@ -465,18 +496,32 @@ func _people_ui():
 	priority.tooltip_text="Автоматический рабочий вернёт груз и возьмётся за стройку. Ручные поручения и выбранные профессии сохраняются."
 	priority.toggled.connect(func(value):world.set_priority(value));sidebar.add_child(priority)
 	_line()
-	for worker in state.data.world.workers:
-		sidebar.add_child(_label(worker.name,18,ACCENT))
+	var ordered=state.data.world.workers.duplicate()
+	ordered.sort_custom(func(a,b):return int(a.id)==selected_worker if (int(a.id)==selected_worker)!=(int(b.id)==selected_worker) else int(a.id)<int(b.id))
+	for worker in ordered:
+		sidebar.add_child(_label(("● " if int(worker.id)==selected_worker else "")+worker.name,18,ACCENT))
+		sidebar.add_child(_button("Найти на карте",_focus_worker.bind(int(worker.id))))
+		var skills=[]
+		for skill in Personnel.SKILLS:
+			if worker.skills[skill]>1:skills.append("%s %d"%[Personnel.SKILL_NAMES[skill],worker.skills[skill]])
+		_hint(" · ".join(skills) if not skills.is_empty() else "Начальные навыки")
+		if not worker.post.is_empty():_hint("Должность: "+Personnel.POSTS[worker.post])
 		var status=_label("",14,MUTED);live_labels["worker_"+str(int(worker.id))]=status;sidebar.add_child(status)
 		var choice=OptionButton.new();choice.custom_minimum_size.y=36
 		for text in ["Авто: работа по приоритету","Строитель","Дровосек: нужна лесопилка","Шахтёр: нужна шахта","Фермер: нужна ферма","Отдых"]:
 			choice.add_item(text)
 		choice.select(Settlement.PREFERENCES.find(worker.preference));choice.item_selected.connect(_worker_choice.bind(int(worker.id)));sidebar.add_child(choice);_line()
+		choice.disabled=not worker.post.is_empty()
 	_hint("При смене работы груз сначала возвращается в Штаб. Выбранный источник добывается до конца; отдых отменяет поручение.")
 	_update_live()
 
 func _worker_choice(index:int,id:int):
 	_notice(world.set_preference(id,Settlement.PREFERENCES[index]));_update_live()
+
+func _focus_worker(id:int):
+	var person=Personnel.worker(state.data,id)
+	if person.is_empty():return
+	selected_worker=id;base.focus_cell(Vector2(person.x,person.y));_refresh()
 
 func _hire_worker():
 	_notice(state.hire_worker());world._relocate_blocked();world._assign_jobs();state.save_progress();_refresh()
@@ -518,6 +563,15 @@ func _resolve_selected():
 
 func _update_live():
 	if in_battle:return
+	for post in Personnel.POSTS:
+		if live_labels.has("post_"+post):
+			var person=Personnel.holder(state.data,post)
+			live_labels["post_"+post].text=person.name+" · "+("на службе" if Personnel.ready(state.data,post) else world.worker_status(int(person.id))) if not person.is_empty() else "Должность свободна"
+	if live_labels.has("medical"):
+		var p=state.data.personnel;var total=0
+		for amount in p.wounded.values():total+=int(amount)
+		var reason=Personnel.treatment_reason(state)
+		live_labels.medical.text="Раненые: %d · возвращено в строй: %d\nПогибло: %d\n%s"%[total,p.treated,p.lost,reason if not reason.is_empty() else "Лечение: %d%%"%mini(100,roundi(100*p.treatment/Personnel.treatment_seconds(state)))]
 	if live_labels.has("orders"):
 		var total=0;var moving=0;var waiting=0
 		for unit in world.battle.units:
@@ -585,6 +639,20 @@ func _trade_ui():
 	_hint("Обозы здесь считаются по времени, отдельной фигурки на карте пока нет. Покупка и награды могут временно превысить предел склада; новая добыча ждёт места.")
 	_update_live()
 
+func _medical_ui():
+	_heading("Лазарет гарнизона")
+	_hint(state.data.personnel.last_report)
+	var status=_label("",17,ACCENT);live_labels.medical=status;sidebar.add_child(status)
+	for kind in ["guard","archer","militia"]:_hint("%s: раненых %d"%[state.catalog.troop(kind).name,state.data.personnel.wounded[kind]])
+	_line()
+	_hint("Один пациент за раз. Порядок: щитоносцы → лучники → мечники. Бойцу нужны 3 монеты, 2 провианта и место в армии. Лекарь занят службой, а не производством.")
+	var toggle=CheckButton.new();toggle.text="Лечить автоматически";toggle.button_pressed=state.data.personnel.auto_treat
+	toggle.toggled.connect(func(value):state.data.personnel.auto_treat=value;state.save_progress();_update_live());sidebar.add_child(toggle)
+	if state.level("infirmary")==0:sidebar.add_child(_button("Разместить лазарет · 45 / 30 / 15",_place.bind("infirmary"),true))
+	sidebar.add_child(_button("Назначить лекаря",_set_tab.bind("officers")))
+	_hint("Базовое лечение 30 игровых секунд. Навык лекаря и уровень лазарета ускоряют его. Во время нападения, нехватки ресурсов или заполненного гарнизона лечение ждёт; прогресс не теряется.")
+	_update_live()
+
 func _send_trade(id:String):_notice(Commerce.send(state,id));_refresh()
 
 func _open_main_menu():
@@ -619,7 +687,7 @@ func _activate_party(next):
 	world.notice.connect(_notice);world.raid_finished.connect(func(_won):_refresh());world.settlement_changed.connect(func():call_deferred("_refresh"))
 	combat.running=false;combat.hide();base.show();result_dialog.hide();retreat_dialog.hide()
 	in_battle=false;benchmark_mode=false;session_started=true;autosave_clock=0;tab="build"
-	selected_building=-1;selected_building_uid=-1;selected_source=-1;placement="";base.zoom=1.0;base.pan=Vector2.ZERO
+	selected_building=-1;selected_building_uid=-1;selected_source=-1;selected_worker=-1;placement="";base.zoom=1.0;base.pan=Vector2.ZERO
 	base.command_group="hero"
 	start_menu.hide();_refresh()
 	if state.save_progress():

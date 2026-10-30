@@ -5,6 +5,7 @@ signal raid_finished(won:bool)
 signal settlement_changed
 const Settlement=preload("res://scripts/settlement.gd")
 var work_status={}
+var worker_moving={}
 var site_targets={}
 var chase_clock=0.0
 var search_after={}
@@ -14,6 +15,7 @@ const WorldRules=preload("res://scripts/world_rules.gd")
 const Snapshot=preload("res://scripts/combat_snapshot.gd")
 const Logistics=preload("res://scripts/logistics.gd")
 const Commerce=preload("res://scripts/commerce.gd")
+const Personnel=preload("res://scripts/personnel.gd")
 var command_mode="advance"
 var navigation_signature=0
 var state
@@ -164,13 +166,17 @@ func _source(id:int)->Dictionary:
 		if int(source.id)==id:return source
 	return {}
 
-func gather(id:int)->String:
+func gather(id:int,worker_id:int=-1)->String:
 	var source=_source(id)
 	if source.is_empty() or source.amount<=0:return "Источник уже исчерпан."
 	for w in state.data.world.workers:
-		if w.job=="idle" and w.carry==0 and w.preference!="rest":
+		if worker_id>=0 and int(w.id)!=worker_id:continue
+		if worker_id>=0 and (w.carry>0 or not w.post.is_empty()):return "Выбранный человек несёт груз или занимает должность. Сначала завершите доставку или освободите должность."
+		if (w.job=="idle" or worker_id>=0) and w.carry==0 and (w.preference!="rest" or worker_id>=0) and w.post.is_empty():
 			if _route(Vector2(w.x,w.y),Vector2(source.x+0.5,source.y+0.5)).is_empty():continue
-			w.job="manual";w.source=id;w.workplace=0;w.progress=0.0;paths.erase(int(w.id));state.save_progress()
+			_release(w);w.job="manual";w.source=id;w.workplace=0;w.progress=0.0;w.depot=0;w.returning=false
+			if worker_id>=0 and w.preference=="rest":w.preference="auto"
+			paths.erase(int(w.id));state.save_progress()
 			return w.name+" будет добывать выбранный источник до исчерпания и носить груз в Штаб."
 	return "Нет свободного рабочего с доступным маршрутом. Измените назначения во вкладке «Люди»."
 
@@ -183,6 +189,9 @@ func _assign_jobs():
 	jobs=jobs+production if state.data.construction_first else production+jobs
 	var assigned={}
 	for w in state.data.world.workers:
+		if not w.post.is_empty():
+			if w.job!="idle":_release(w)
+			continue
 		if w.returning or w.job=="manual":continue
 		if w.job!="idle":
 			var key=w.job+":"+str(int(w.workplace))
@@ -197,13 +206,13 @@ func _assign_jobs():
 		var candidate={}
 		for preferred in [j.kind,"auto"]:
 			for w in state.data.world.workers:
-				if w.job=="idle" and w.carry==0 and w.preference==preferred:
+				if w.job=="idle" and w.carry==0 and w.preference==preferred and w.post.is_empty():
 					candidate=w;break
 			if not candidate.is_empty():break
 		if candidate.is_empty():
 			if j.kind=="build" and state.data.construction_first:
 				for w in state.data.world.workers:
-					if w.preference=="auto" and w.job in ["wood","stone","farm"] and not w.returning:
+					if w.preference=="auto" and w.post.is_empty() and w.job in ["wood","stone","farm"] and not w.returning:
 						_release(w);break
 			continue
 		candidate.job=j.kind;candidate.workplace=j.uid;candidate.source=-1;candidate.progress=0.0;paths.erase(int(candidate.id));assigned[key]=true
@@ -232,6 +241,16 @@ func _travel(w:Dictionary,target:Vector2,dt:float)->bool:
 	return pos.distance_to(target)<0.08
 
 func _work(w:Dictionary,dt:float):
+	if not w.post.is_empty() and w.carry==0:
+		var station={}
+		for building in state.data.buildings:
+			if building.built and building.id==("infirmary" if w.post=="medic" else "hq"):station=building;break
+		w.at_post=false
+		if station.is_empty():work_status[int(w.id)]="Нет здания для службы";return
+		var point=_site_target(w,station)
+		if point==Vector2.INF:work_status[int(w.id)]="Нет пути к месту службы";return
+		w.at_post=_travel(w,point,dt)
+		work_status[int(w.id)]=Personnel.POSTS[w.post]+(" · на месте службы" if w.at_post else " · идёт к месту службы");return
 	work_status[int(w.id)]={"idle":"Отдыхает" if w.preference=="rest" else "Ждёт задания","manual":"Добывает выбранный ресурс","wood":"Заготовка древесины","stone":"Добыча камня","farm":"Выращивает еду","build":"Строит"}[w.job]
 	var source=_source(int(w.source))
 	if w.returning or w.carry>=5 or (w.carry>0 and (Logistics.room(state.data,w.carry_kind)==0 or (w.job in ["wood","stone","manual"] and (source.is_empty() or source.amount<=0)))):
@@ -243,12 +262,15 @@ func _work(w:Dictionary,dt:float):
 		if _travel(w,target,dt):
 			var amount=mini(int(w.carry),free)
 			state.data[w.carry_kind]+=amount;state.data.stats[w.carry_kind+"_delivered"]+=amount;w.carry-=amount;paths.erase(int(w.id))
+			Personnel.practice(w,"farm" if w.carry_kind=="food" else w.carry_kind,amount)
 			if w.carry>0:w.returning=true;return
 			w.depot=0;site_targets.erase(int(w.id))
 			if w.returning or (w.job=="manual" and (source.is_empty() or source.amount<=0)):
 				w.returning=false;w.job="idle";w.workplace=0;w.source=-1;w.progress=0.0
 		return
 	if w.job=="idle":return
+	var skill="wood" if w.job=="manual" and source.get("kind")=="wood" else ("stone" if w.job=="manual" else w.job)
+	dt*=1.0+0.08*(int(w.skills.get(skill,1))-1)
 	if w.job in ["wood","stone","manual","farm"]:
 		var output="food" if w.job=="farm" else (source.get("kind","wood") if w.job=="manual" else w.job)
 		if Logistics.room(state.data,output)==0:work_status[int(w.id)]="Пауза производства: хранилища заполнены";return
@@ -276,6 +298,7 @@ func _work(w:Dictionary,dt:float):
 			building.work_done=minf(required_work(building),float(building.work_done)+dt)
 			if building.work_done>=required_work(building):
 				building.built=true;building.level=int(building.target_level);building.hp=float(state.catalog.building(building.id).hp)*building.level
+				Personnel.practice(w,"build",10)
 				_release(w);rebuild_navigation();sync_army()
 				notice.emit("Готово: "+state.catalog.building(building.id).name+" · уровень "+str(building.level));settlement_changed.emit()
 		else:
@@ -329,11 +352,16 @@ func _tick(dt:float):
 	if floori(state.data.world.clock/300.0)!=floori((state.data.world.clock-dt)/300.0):_regrow_wood()
 	var delivery=Commerce.tick(state,dt)
 	if not delivery.is_empty():notice.emit(delivery);settlement_changed.emit()
+	var medical=Personnel.tick(state,dt)
+	if not medical.is_empty():sync_army();notice.emit(medical);settlement_changed.emit()
 	chase_clock+=dt
 	if chase_clock>=0.5:chase_clock=0;_update_chase_paths()
 	if job_timer>2:job_timer=0;_assign_jobs();_check_goals()
 	_food_tick(dt)
-	for w in state.data.world.workers:_work(w,dt*(0.6 if state.data.food==0 else 1.0))
+	for w in state.data.world.workers:
+		var previous=Vector2(w.x,w.y)
+		_work(w,dt*(0.6 if state.data.food==0 else 1.0))
+		worker_moving[int(w.id)]=previous.distance_squared_to(Vector2(w.x,w.y))>0.00001
 	battle.step(dt);battle.events.clear()
 	if state.data.world.raid_active:_attack_structures()
 	if state.data.world.raid_active:
@@ -351,7 +379,11 @@ func _end_raid(won:bool):
 	state.data.world.raid_active=false;state.data.world.raid_in=WorldRules.settings(state.data).interval
 	state.data["wins" if won else "losses"]+=1
 	battle.projectiles.clear()
-	state.data.army=battle.survivors()
+	var survivors=battle.survivors()
+	var casualties=Personnel.casualties(state.data,state.data.army,survivors)
+	state.data.army=survivors
+	state.data.personnel.last_report="%s · нападение %d\nРаненых: %d · погибших: %d\nВ строю осталось: %d"%["Оборона удержана" if won else "Оборона прорвана",state.data.world.raid_number,casualties.wounded,casualties.lost,state.army_count()]
+	if casualties.wounded+casualties.lost>0:notice.emit("Потери: %d раненых, %d погибших. Раненых можно вернуть через лазарет."%[casualties.wounded,casualties.lost])
 	if won:
 		state.data.world.raids_defeated+=1;state.data.coins+=55;state.data.food+=2;state.data.xp[state.data.selected_hero]+=35
 		notice.emit("Набег отражён. Монеты +55, провиант +2, опыт героя +35. Поселение продолжает жить.")
@@ -445,6 +477,7 @@ func set_preference(id:int,preference:String)->String:
 	if preference not in Settlement.PREFERENCES:return "Неизвестное назначение."
 	for w in state.data.world.workers:
 		if int(w.id)==id:
+			if not w.post.is_empty():return "Сначала освободите человека от должности."
 			w.preference=preference;_release(w);_assign_jobs();state.save_progress()
 			return w.name+": назначение изменено. Уже добытый груз будет доставлен."
 	return "Рабочий не найден."
@@ -454,7 +487,10 @@ func set_priority(value:bool):
 
 func worker_status(id:int)->String:return work_status.get(id,"Ждёт назначения")
 
-func food_need()->int:return state.data.world.workers.size()+ceili(float(state.army_count())/12.0)
+func food_need()->int:
+	var logistics=Personnel.holder(state.data,"quartermaster")
+	var divisor=12+2*(int(logistics.skills.logistics)-1) if Personnel.ready(state.data,"quartermaster") else 12
+	return state.data.world.workers.size()+ceili(float(state.army_count())/float(divisor))
 
 func _food_tick(dt:float):
 	state.data.world.food_clock+=dt

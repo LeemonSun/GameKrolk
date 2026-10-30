@@ -30,6 +30,7 @@ func run():
 	check(app.start_menu.get_global_rect().encloses(app.start_menu.exit_button.get_global_rect()),"new game form fits without hiding exit below screen")
 	app.start_menu.seed_input.text="314159";app.start_menu.name_input.text="Тихая бухта";app.start_menu.threat.select(0);app.start_menu.threat.item_selected.emit(0);app.start_menu._new_game()
 	check(app.session_started and not app.start_menu.visible,"New game button enters playable world")
+	check(app.state.data.selected_hero=="warden","independent new party does not receive canonical faction captain for free")
 	check(app.state.data.world.seed==314159 and Rules.mode(app.state.data)=="calm" and app.state.data.world.raid_in>359,"seed and peaceful threat mode affect actual world")
 	check(app.state.data.profile.name=="Тихая бухта" and app.state._valid(app.state.data),"party name is saved in validated state")
 	var first_path=app.state.save_path

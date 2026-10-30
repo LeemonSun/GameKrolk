@@ -90,8 +90,8 @@ func _draw():
 		draw_set_transform(rect.position,0,Vector2.ONE*factor)
 		if u.hp>0 and (u.hp<u.max_hp or u.kind=="hero"):
 			var w=34.0 if u.kind=="hero" else 15.0
-			draw_rect(Rect2(p.x-w/2,p.y-39 if u.kind=="hero" else p.y-25,w,3),Color("1d2827"))
-			draw_rect(Rect2(p.x-w/2,p.y-39 if u.kind=="hero" else p.y-25,w*u.hp/u.max_hp,3),Color("b4cf9b") if u.team==0 else Color("d18b77"))
+			draw_rect(Rect2(p.x-w/2,p.y-56 if u.kind=="hero" else p.y-38,w,3),Color("1d2827"))
+			draw_rect(Rect2(p.x-w/2,p.y-56 if u.kind=="hero" else p.y-38,w*u.hp/u.max_hp,3),Color("b4cf9b") if u.team==0 else Color("d18b77"))
 	for p in battle.projectiles:
 		var dir=(p.to-p.pos).normalized();draw_line(p.pos-dir*9,p.pos,Color("ead9b4"),2)
 	for effect in battle.effects:

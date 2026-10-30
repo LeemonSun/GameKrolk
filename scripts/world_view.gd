@@ -11,6 +11,7 @@ var state
 var world
 var selected=-1
 var selected_source=-1
+var selected_worker=-1
 var placement=""
 var hover=Vector2i(-1,-1)
 var clock=0.0
@@ -27,6 +28,10 @@ func _process(dt):clock+=dt;queue_redraw()
 func grid_rect()->Rect2:
 	var cell=minf(size.x/(WorldData.WIDTH+1),size.y/(WorldData.HEIGHT+1))*zoom
 	return Rect2((size-Vector2(WorldData.WIDTH,WorldData.HEIGHT)*cell)*0.5+pan,Vector2(WorldData.WIDTH,WorldData.HEIGHT)*cell)
+
+func focus_cell(position:Vector2):
+	var rect=grid_rect();var cell=rect.size.x/WorldData.WIDTH
+	pan+=size*0.5-(rect.position+position*cell);queue_redraw()
 
 func _gui_input(event):
 	var rect=grid_rect();var cell=rect.size.x/WorldData.WIDTH
@@ -95,7 +100,9 @@ func _draw():
 			draw_rect(Rect2(area.position+Vector2(2,area.size.y-6),Vector2((area.size.x-4)*ratio,4)),Color("cb8d70"))
 	for w in state.data.world.workers:
 		var p=rect.position+Vector2(w.x,w.y)*cell
-		Art.person(self,p,"militia",0,clock*8 if w.job!="idle" else 0,Vector2.RIGHT,0,0,Color.WHITE,false,factor*0.85)
+		if int(w.id)==selected_worker:draw_arc(p+Vector2(0,2)*factor,13*factor,0,TAU,20,Color("e5e8e3"),maxf(1,factor*2))
+		Art.person(self,p,"worker",0,clock*8 if world!=null and world.worker_moving.get(int(w.id),false) else 0,Vector2.RIGHT,0,0,Color.WHITE,false,factor*0.85)
+		if int(w.id)==selected_worker:draw_string(ThemeDB.fallback_font,p+Vector2(-18,-35)*factor,w.name,HORIZONTAL_ALIGNMENT_LEFT,-1,12,Color("eff0e9"))
 		if w.carry>0:draw_rect(Rect2(p+Vector2(4,-13)*factor,Vector2(6,7)*factor),Color("bd9c63") if w.carry_kind=="wood" else (Color("a7c57b") if w.carry_kind=="food" else Color("acb9ad")))
 	if world!=null:
 		if show_orders:_draw_orders(rect,factor)
@@ -109,8 +116,9 @@ func _draw():
 			var attack=1.0-u.attack_left/u.windup if u.attack_left>0 and u.windup>0 else 0.0
 			Art.person(self,p,u.kind,int(u.team),world.battle.time*10+u.id if u.moving else 0,u.facing,attack,float(u.flash),hero_color,u.hp<=0,factor)
 			if u.hp>0 and u.hp<u.max_hp:
-				draw_rect(Rect2(p+Vector2(-9,-28)*factor,Vector2(18,3)*factor),Color("25332d"))
-				draw_rect(Rect2(p+Vector2(-9,-28)*factor,Vector2(18*u.hp/u.max_hp,3)*factor),Color("accf8d") if u.team==0 else Color("d9957d"))
+				var bar_y=-56 if u.kind=="hero" else -38
+				draw_rect(Rect2(p+Vector2(-9,bar_y)*factor,Vector2(18,3)*factor),Color("25332d"))
+				draw_rect(Rect2(p+Vector2(-9,bar_y)*factor,Vector2(18*u.hp/u.max_hp,3)*factor),Color("accf8d") if u.team==0 else Color("d9957d"))
 		for p in world.battle.projectiles:
 			var dir=(p.to-p.pos).normalized();draw_line(rect.position+(p.pos-dir*9)*factor,rect.position+p.pos*factor,Color("ead6a8"),maxf(1,factor*2))
 		for effect in world.battle.effects:

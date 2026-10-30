@@ -36,7 +36,7 @@ func _ready():
 	panel.add_child(margin)
 	var column=VBoxContainer.new();column.add_theme_constant_override("separation",12);margin.add_child(column)
 	var title=label("КРОЛИК / ЦИТАДЕЛЬ",32);title.add_theme_color_override("font_color",Palette.INK);column.add_child(title)
-	column.add_child(label("Строительство · люди · оборона поселения   |   прототип 0.0.6",14))
+	column.add_child(label("Строительство · люди · оборона поселения   |   прототип 0.0.7",14))
 	back_button=button("Вернуться в игру",func():resume_requested.emit());column.add_child(back_button)
 	column.add_child(HSeparator.new());column.add_child(label("Сохранённые партии",18))
 	slots=OptionButton.new();slots.custom_minimum_size.y=42;slots.item_selected.connect(_select_slot);column.add_child(slots)

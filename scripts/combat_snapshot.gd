@@ -40,6 +40,7 @@ static func capture(battle)->Dictionary:
 	for unit in battle.units:
 		var row=pack(unit);row.erase("pos");row.x=unit.pos.x;row.y=unit.pos.y
 		for key in UNIT_FLOATS:row[key]=float(row[key])
+		row.regeneration=float(row.get("regeneration",0.0))
 		rows.append(row)
 	return {"complete":1,"globals":globals,"units":rows,"projectiles":pack(battle.projectiles),"effects":pack(battle.effects),"traces":pack(battle.traces),
 		"keep_position":pack(battle.keep_position),"keep_hp":float(battle.keep_hp),"keep_max":float(battle.keep_max),"cooldown":float(battle.hero_cooldown),"next_uid":battle.next_uid}
@@ -48,6 +49,8 @@ static func restore(battle,snapshot:Dictionary):
 	battle.units=[]
 	for row in snapshot.units:
 		var unit=unpack(row);unit.pos=Vector2(row.x,row.y);unit.erase("x");unit.erase("y")
+		unit.regeneration=float(row.get("regeneration",0.0))
+		unit.combat_tier=int(row.get("combat_tier",row.rank))
 		unit.goal=Vector2.INF if row.goal==null else unpack(row.goal)
 		for key in UNIT_INTEGERS:unit[key]=int(unit[key])
 		battle.units.append(unit)
@@ -66,6 +69,7 @@ static func normalize(snapshot:Dictionary):
 	for key in INTEGERS:snapshot.globals[key]=int(snapshot.globals[key])
 	for row in snapshot.units:
 		for key in UNIT_INTEGERS:row[key]=int(row[key])
+		if row.has("combat_tier"):row.combat_tier=int(row.combat_tier)
 	for projectile in snapshot.projectiles:
 		for key in ["target","source","team"]:projectile[key]=int(projectile[key])
 	for row in snapshot.runtime.workers:
@@ -138,11 +142,13 @@ static func valid(snapshot:Dictionary,workers:Array)->bool:
 		for key in UNIT_INTEGERS:
 			if not integer(unit.get(key)):return false
 		if unit.id!=index or unit.get("command") not in COMMANDS:return false
+		if not integer(unit.get("combat_tier",unit.rank)) or unit.get("combat_tier",unit.rank)!=unit.rank:return false
 		for key in ["target","attack_target"]:
 			if unit[key]<-1 or unit[key]>=count:return false
 		for key in ["timer","windup","attack_left","goal_until","flash","died","poison"]:
 			if not number(unit.get(key)) or absf(float(unit[key]))>1e12:return false
 		if unit.windup<0 or unit.windup>10 or unit.attack_left>unit.windup+0.001 or unit.flash<0 or unit.poison< -1:return false
+		if not number(unit.get("regeneration",0.0)) or unit.get("regeneration",0.0)<0 or unit.get("regeneration",0.0)>30:return false
 		for key in ["prev","home"]:
 			if not vector(unit.get(key)):return false
 		if not vector(unit.get("facing"),2) or not unit.get("moving") is bool:return false

@@ -3,12 +3,14 @@ extends RefCounted
 const Catalog=preload("res://scripts/catalog.gd")
 var SIZE=Vector2(1000,600)
 const CELL=76.0
+const SEPARATION_CELL=18.0
 var catalog=Catalog.new()
 var units:Array=[]
 var projectiles:Array=[]
 var effects:Array=[]
 var events:Array=[]
 var grid:Dictionary={}
+var separation_grid:Dictionary={}
 var rng=RandomNumberGenerator.new()
 var time=0.0
 var tick=0
@@ -82,17 +84,38 @@ func _add_unit(kind:String,team:int,pos:Vector2,def:Dictionary):
 		"rank":int(def.get("rank",1)),"timer":rng.randf_range(0,0.5),"target":-1,"attack_target":-1,"windup":0.0,"attack_left":0.0,
 		"facing":Vector2.RIGHT if team==0 else Vector2.LEFT,"goal":Vector2.INF,"goal_until":0.0,"moving":false,"flash":0.0,"died":-1.0,"poison":0.0,"path":[],"command":"guard","route_blocked":false}
 	units.append(u)
+	# Legacy `rank` is a serialized combat coefficient, never a clan rank.
+	u["combat_tier"]=int(def.get("combat_tier",def.get("rank",1)))
+	u.rank=u.combat_tier
+	u["regeneration"]=0.0
 	next_uid+=1
 
 func _cell(pos:Vector2)->Vector2i:return Vector2i(floori(pos.x/CELL),floori(pos.y/CELL))
 
 func _rebuild_grid():
-	grid.clear()
+	grid.clear();separation_grid.clear()
 	for u in units:
 		if u.hp<=0:continue
 		var key=Vector3i(_cell(u.pos).x,_cell(u.pos).y,u.team)
 		if not grid.has(key):grid[key]=[]
 		grid[key].append(u.id)
+		var close_key=Vector3i(floori(u.pos.x/SEPARATION_CELL),floori(u.pos.y/SEPARATION_CELL),int(u.team))
+		if not separation_grid.has(close_key):separation_grid[close_key]=[]
+		separation_grid[close_key].append(u.id)
+
+func _separation(u:Dictionary)->Vector2:
+	var result=Vector2.ZERO
+	var xmin=floori((u.pos.x-14)/SEPARATION_CELL);var xmax=floori((u.pos.x+14)/SEPARATION_CELL)
+	var ymin=floori((u.pos.y-14)/SEPARATION_CELL);var ymax=floori((u.pos.y+14)/SEPARATION_CELL)
+	for x in range(xmin,xmax+1):
+		for y in range(ymin,ymax+1):
+			var key=Vector3i(x,y,int(u.team))
+			if not separation_grid.has(key):continue
+			for id in separation_grid[key]:
+				if id==u.id or units[id].hp<=0:continue
+				var diff:Vector2=u.pos-units[id].pos;var distance=diff.length_squared()
+				if distance>0.01 and distance<196.0:result+=diff*(1.0/sqrt(distance)-1.0/14.0)
+	return result
 
 func _near(pos:Vector2,team:int,radius:float)->Array:
 	var out:Array=[];var center=_cell(pos);var extent=ceili(radius/CELL);var r2=radius*radius
@@ -132,24 +155,32 @@ func survivors()->Dictionary:
 
 func order(group:String,pos:Vector2,command:String="advance"):
 	if finished:return
-	pos=pos.clamp(Vector2(65,45),SIZE-Vector2(40,45))
-	var count=0
-	for u in units:
-		if u.team==0 and u.hp>0 and (group=="all" or group==u.kind):count+=1
-	var columns=mini(25,maxi(1,ceili(sqrt(float(count)))))
-	var rows=ceili(float(count)/columns)
+	var selected=[];var center=Vector2.ZERO
+	for unit in units:
+		if unit.team==0 and unit.hp>0 and (group=="all" or group==unit.kind):selected.append(unit);center+=unit.pos
+	if selected.is_empty():return
+	center/=selected.size()
+	var forward=(pos-center).normalized()
+	if forward.length_squared()<0.1:forward=Vector2.RIGHT
+	var side=forward.orthogonal()
+	var priority={"guard":0,"militia":1,"hero":2,"archer":3}
+	selected.sort_custom(func(a,b):
+		var first=int(priority.get(a.kind,1));var second=int(priority.get(b.kind,1))
+		return int(a.id)<int(b.id) if first==second else first<second)
+	var columns=mini(25,maxi(1,ceili(sqrt(float(selected.size())))))
+	var rows=ceili(float(selected.size())/columns)
 	var spacing=Vector2(24,26) if mode=="world" else Vector2(17,19)
-	var extent=Vector2(columns-1,rows-1)*spacing*0.5
+	var half_width=(columns-1)*spacing.x*0.5;var half_depth=(rows-1)*spacing.y*0.5
+	var extent=Vector2(absf(side.x)*half_width+absf(forward.x)*half_depth,absf(side.y)*half_width+absf(forward.y)*half_depth)
 	pos=pos.clamp(Vector2(65,45)+extent,SIZE-Vector2(40,45)-extent)
-	var n=0
-	for u in units:
-		if u.team!=0 or u.hp<=0:continue
-		if group!="all" and group!=u.kind:continue
-		var offset=Vector2(float(n%columns)-(columns-1)*0.5,float(n/columns)-(rows-1)*0.5)*spacing
+	for n in selected.size():
+		var unit=selected[n]
+		var lateral=(float(n%columns)-(columns-1)*0.5)*spacing.x
+		var depth=((rows-1)*0.5-float(n/columns))*spacing.y
+		var offset=side*lateral+forward*depth
 		if group=="hero":offset=Vector2.ZERO
-		u.goal=(pos+offset).clamp(Vector2(65,35),SIZE-Vector2(35,35));u.goal_until=time+3600.0;u.command=command
-		u.target=-1;u.attack_target=-1;u.attack_left=0.0;n+=1
-		u.route_blocked=false
+		unit.goal=(pos+offset).clamp(Vector2(65,35),SIZE-Vector2(35,35));unit.goal_until=time+3600.0;unit.command=command
+		unit.target=-1;unit.attack_target=-1;unit.attack_left=0.0;unit.route_blocked=false
 	effects.append({"type":"order","pos":pos,"age":0.0,"life":0.8,"radius":22.0,"color":Color("d6c18b")})
 
 func step(dt:float):
@@ -163,6 +194,9 @@ func step(dt:float):
 		u.prev=u.pos;u.flash=maxf(0,u.flash-dt);u.moving=false
 		if u.hp<=0:continue
 		u.timer-=dt
+		if u.get("regeneration",0.0)>0:
+			u.regeneration=maxf(0,float(u.regeneration)-dt)
+			if u.poison<=0:u.hp=minf(u.max_hp,u.hp+dt*6.0)
 		if u.poison>0:
 			u.poison-=dt;_damage(u.id,dt*5,-1)
 			if u.hp<=0:continue
@@ -200,11 +234,7 @@ func step(dt:float):
 					if effects.size()<160:effects.append({"type":"hit","pos":keep+Vector2(20,rng.randf_range(-25,25)),"age":0.0,"life":0.25,"radius":10.0,"color":Color("edac76")})
 			else:movement=(keep-u.pos).normalized()
 		if movement.length_squared()>0.01:
-			var separation=Vector2.ZERO
-			for id in _near(u.pos,u.team,14):
-				if id==u.id:continue
-				var diff=u.pos-units[id].pos;var d2=diff.length_squared()
-				if d2>0.01:separation+=diff.normalized()*(1.0-sqrt(d2)/14.0)
+			var separation=_separation(u)
 			movement=(movement+separation*0.9).normalized()
 			var destination=(u.pos+movement*u.speed*dt).clamp(Vector2(18,18) if mode=="world" else Vector2(60,30),SIZE-Vector2(18,18) if mode=="world" else SIZE-Vector2(25,30))
 			if not walkable.is_valid() or walkable.call(destination):u.pos=destination
@@ -243,9 +273,10 @@ func _resolve_attack(u:Dictionary):
 	attacks_resolved+=1
 	if u.reach>60:
 		var destination=target.pos
-		projectiles.append({"pos":u.pos+Vector2(0,-9),"to":destination,"target":id,"source":u.id,"damage":u.damage,"team":u.team,"life":2.0})
+		var pressure=0.55 if u.kind=="archer" and u.pos.distance_to(target.pos)<50.0 else 1.0
+		projectiles.append({"pos":u.pos+Vector2(0,-9),"to":destination,"target":id,"source":u.id,"damage":u.damage*pressure,"team":u.team,"life":2.0})
 	else:
-		var gap=int(u.rank)-int(target.rank)
+		var gap=int(u.combat_tier)-int(target.combat_tier)
 		var dodged=gap<=-2 and rng.randf()<0.48
 		var hit_color=Color("d3bf8f") if dodged else Color("f6d499")
 		if not dodged:_damage(id,u.damage,u.id)
@@ -254,10 +285,17 @@ func _resolve_attack(u:Dictionary):
 			var axis=u.facing.orthogonal()*45
 			_trace(u.pos+u.facing*24-axis,u.pos+u.facing*24+axis)
 
-func _damage(id:int,amount:float,source:int):
+func _damage(id:int,amount:float,source:int,ranged:bool=false,from_position:Vector2=Vector2.INF):
 	var u=units[id]
 	if u.hp<=0:return
-	if u.kind=="guard":amount*=0.7
+	if u.kind=="guard":
+		amount*=0.7
+		if ranged:
+			var origin=from_position
+			if not origin.is_finite() and source>=0 and source<units.size():origin=units[source].pos
+			if origin.is_finite() and u.facing.dot((origin-u.pos).normalized())>0.2:
+				amount*=0.5
+				if effects.size()<160:effects.append({"type":"hit","pos":u.pos+u.facing*10,"age":0.0,"life":0.2,"radius":14.0,"color":Color("d9e1e0")})
 	if u.kind=="hero" and hero_kind=="warden":amount*=0.55
 	if u.team==0 and time<buff_until:amount*=0.5
 	u.hp=maxf(0,u.hp-amount);u.flash=0.10
@@ -276,7 +314,7 @@ func _update_projectiles(dt:float):
 		var nearest=Geometry2D.get_closest_point_to_segment(target.pos,old,p.pos)
 		var struck=target.hp>0 and nearest.distance_to(target.pos)<12
 		if struck:
-			_damage(p.target,p.damage,p.source)
+			_damage(p.target,p.damage,p.source,true,old)
 			if effects.size()<160:effects.append({"type":"hit","pos":p.pos,"age":0.0,"life":0.18,"radius":7.0,"color":Color("f0d69c")})
 		if struck or p.life<=0 or p.pos.distance_to(p.to)<1:projectiles.remove_at(i)
 
@@ -286,6 +324,13 @@ func skill()->String:
 	if hero.hp<=0:return "Герой выбыл из боя."
 	if hero_cooldown>0:return "Техника ещё восстанавливается."
 	if hero_kind=="astreya" and traces.is_empty():return "Накопите следы: двигайтесь или атакуйте."
+	var patient={};var condition=1.0
+	if hero_kind=="lina":
+		for unit in units:
+			if unit.team!=0 or unit.hp<=0 or unit.get("regeneration",0.0)>0 or hero.pos.distance_to(unit.pos)>190:continue
+			var fraction=float(unit.hp)/float(unit.max_hp)
+			if fraction<condition:condition=fraction;patient=unit
+		if patient.is_empty():return "Рядом нет раненого живого союзника для лечебной печати."
 	hero_cooldown=float(catalog.hero(hero_kind).skill_cooldown);skill_casts+=1
 	if hero_kind=="astreya":
 		for line in traces:
@@ -297,11 +342,8 @@ func skill()->String:
 					_damage(u.id,75+hero.damage*0.6,hero_id);break
 		traces.clear()
 	elif hero_kind=="lina":
-		for u in units:
-			if u.hp<=0 or hero.pos.distance_to(u.pos)>190:continue
-			if u.team==0:u.hp=minf(u.max_hp,u.hp+55)
-			else:u.poison=7
-		effects.append({"type":"pulse","pos":hero.pos,"age":0.0,"life":1.0,"radius":190.0,"color":Color("86e0be")})
+		patient.regeneration=8.0
+		effects.append({"type":"pulse","pos":patient.pos,"age":0.0,"life":0.8,"radius":32.0,"color":Color("c8ded3")})
 	else:
 		buff_until=time+7
 		for u in units:
@@ -315,5 +357,8 @@ func skill()->String:
 func can_auto_skill()->bool:
 	var hero=units[hero_id]
 	if finished or hero.hp<=0 or hero_cooldown>0:return false
-	if hero_kind=="lina" and hero.hp<hero.max_hp*0.6:return true
+	if hero_kind=="lina":
+		for unit in units:
+			if unit.team==0 and unit.hp>0 and unit.hp<unit.max_hp*0.75 and unit.get("regeneration",0.0)<=0 and hero.pos.distance_to(unit.pos)<=190:return true
+		return false
 	return not _near(hero.pos,1,85 if hero_kind=="astreya" else 135).is_empty() and (hero_kind!="astreya" or not traces.is_empty())
