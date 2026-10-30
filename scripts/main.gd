@@ -21,6 +21,9 @@ const Logistics=preload("res://scripts/logistics.gd")
 const Commerce=preload("res://scripts/commerce.gd")
 const Personnel=preload("res://scripts/personnel.gd")
 const AtlasView=preload("res://scripts/atlas_view.gd")
+const Chapter=preload("res://scripts/chapter.gd")
+var objective_panel:PanelContainer
+var objective_text:Label
 const BG=Palette.BG
 const PANEL=Palette.PANEL
 const ACCENT=Palette.ACCENT
@@ -64,7 +67,7 @@ func _ready():
 	else:
 		profiles=Profiles.new();test_profile=profiles.last_path()
 	state=State.new(test_profile);state.load_progress()
-	world=World.new(state);world.notice.connect(_notice);world.raid_finished.connect(func(_won):_refresh());world.settlement_changed.connect(func():call_deferred("_refresh"))
+	world=World.new(state);world.notice.connect(_notice);world.raid_finished.connect(_on_home_raid_finished);world.settlement_changed.connect(func():call_deferred("_refresh"))
 	_setup_theme();_setup_ui();_refresh()
 	start_menu=StartMenu.new();add_child(start_menu)
 	start_menu.continue_requested.connect(_continue_profile);start_menu.new_requested.connect(_new_party)
@@ -72,7 +75,7 @@ func _ready():
 	if test_mode:session_started=true;start_menu.hide()
 	else:_open_main_menu()
 	if not state.warning.is_empty():_notice(state.warning,15)
-	print("GAMEKROLK_READY "+JSON.stringify({"version":"0.0.8","save":ProjectSettings.globalize_path(state.save_path),"renderer":RenderingServer.get_current_rendering_method()}))
+	print("GAMEKROLK_READY "+JSON.stringify({"version":"0.0.9","save":ProjectSettings.globalize_path(state.save_path),"renderer":RenderingServer.get_current_rendering_method()}))
 
 func _style(color:Color,border:Color=Color.TRANSPARENT,radius:int=10)->StyleBoxFlat:
 	var s=StyleBoxFlat.new();s.bg_color=color
@@ -103,11 +106,15 @@ func _setup_ui():
 	var header=HBoxContainer.new();root.add_child(header)
 	var brand=VBoxContainer.new();brand.size_flags_horizontal=Control.SIZE_EXPAND_FILL;brand.add_theme_constant_override("separation",1);header.add_child(brand)
 	title=_label("КРОЛИК  /  ЦИТАДЕЛЬ",29,ACCENT);brand.add_child(title)
-	subtitle=_label("МИР И ПОСЕЛЕНИЕ    ·    прототип 0.0.8    ·    хозяйство и оборона",12,MUTED);brand.add_child(subtitle)
+	subtitle=_label("МИР И ПОСЕЛЕНИЕ    ·    прототип 0.0.9    ·    хозяйство и оборона",12,MUTED);brand.add_child(subtitle)
 	header.add_child(_button("Сохранить",func():_notice("Прогресс сохранён." if state.save_progress() else state.warning)))
 	header.add_child(_button("Меню",_open_main_menu))
 	header.add_child(_button("Во весь экран  F11",_fullscreen))
 	var resource_panel=PanelContainer.new();root.add_child(resource_panel);resources=_label("",17,INK);resource_panel.add_child(resources)
+	objective_panel=PanelContainer.new();root.add_child(objective_panel)
+	var objective_row=HBoxContainer.new();objective_panel.add_child(objective_row)
+	objective_text=_label("",15,ACCENT);objective_row.add_child(objective_text)
+	objective_row.add_child(_button("К текущей цели",_set_tab.bind("mission"),true))
 	toolbar=HFlowContainer.new();root.add_child(toolbar)
 	content=HBoxContainer.new();content.size_flags_vertical=Control.SIZE_EXPAND_FILL;content.add_theme_constant_override("separation",16);root.add_child(content)
 	var stage=PanelContainer.new();stage.size_flags_horizontal=Control.SIZE_EXPAND_FILL;stage.size_flags_vertical=Control.SIZE_EXPAND_FILL;content.add_child(stage)
@@ -140,7 +147,9 @@ func _refresh():
 	if tab=="map":map_view.activate(world.regional);map_view.show();base.hide()
 	else:map_view.hide();base.show()
 	for entry in [["map","Мир"],["build","Строить"],["people","Люди"],["logistics","Снабжение"],["trade","Поставки"],["goals","Рубежи"],["orders","Приказы"],["heroes","Герои"],["army","Армия"],["medical","Лазарет"],["officers","Должности"],["tech","Технологии"]]:
+		if Chapter.active(state.data) and entry[0] not in ["build","people","army","orders","medical","tech"]:continue
 		var b=_button(entry[1],_set_tab.bind(entry[0]),tab==entry[0]);toolbar.add_child(b)
+	if Chapter.enabled(state.data):toolbar.add_child(_button("Первый рубеж",_set_tab.bind("mission"),tab=="mission"))
 	var spacer=Control.new();spacer.size_flags_horizontal=Control.SIZE_EXPAND_FILL;toolbar.add_child(spacer)
 	toolbar.add_child(_button("Продолжить" if world.paused else "Пауза  P",_pause_world))
 	toolbar.add_child(_button("Разведка",func():_notice(preload("res://scripts/world_rules.gd").forecast(state.data),15)))
@@ -148,6 +157,7 @@ func _refresh():
 		toolbar.add_child(_button("Полигон",func():_start_battle("hero")))
 		toolbar.add_child(_button("Проверить набег",_trigger_raid,true))
 	match tab:
+		"mission":_mission_ui()
 		"map":_atlas_ui()
 		"build":_build_ui()
 		"people":_people_ui()
@@ -160,13 +170,15 @@ func _refresh():
 		"army":_army_ui()
 		"officers":_officers_ui()
 		"tech":_tech_ui()
-	base.selected=selected_building;base.selected_source=selected_source;base.selected_worker=selected_worker;base.placement=placement;base.show_orders=tab=="orders";base.queue_redraw()
+	base.selected=selected_building;base.selected_source=selected_source;base.selected_worker=selected_worker;base.placement=placement;base.show_orders=tab=="orders" or (tab=="mission" and state.data.chapter.phase in ["countdown","battle"]);base.queue_redraw()
+	_update_live()
 
 func _set_tab(value:String):
 	tab=value;placement="";base.placement="";_refresh()
 
 func _update_resources():
 	var raid="НАБЕГ!" if state.data.world.raid_active else "НАБЕГ ЧЕРЕЗ %02d:%02d"%[int(state.data.world.raid_in)/60,int(state.data.world.raid_in)%60]
+	if Chapter.active(state.data) and not state.data.world.raid_active:raid="РАЗЪЕЗД ЧЕРЕЗ %d с"%ceili(state.data.chapter.left) if state.data.chapter.phase=="countdown" else "ПОДГОТОВКА · БЕЗ СПЕШКИ"
 	var troops=str(state.army_count())+(" + %d в походе"%state.army_away() if state.army_away()>0 else "")
 	resources.text="МОНЕТЫ %d    ДРЕВЕСИНА %d    КАМЕНЬ %d    ПРОВИАНТ %d    АРМИЯ %s/%d    %s"%[state.data.coins,state.data.wood,state.data.stone,state.data.food,troops,state.capacity(),raid]
 
@@ -231,6 +243,8 @@ func _base_click(cell:Vector2i):
 		if selected_source>=0:tab="build"
 		_refresh();return
 	var def=state.catalog.building(placement)
+	var mission_reason=Chapter.placement_reason(state,placement,cell)
+	if not mission_reason.is_empty():_notice(mission_reason,12);return
 	for x in range(cell.x,cell.x+int(def.width)):
 		for y in range(cell.y,cell.y+int(def.height)):
 			if world.occupied(Vector2i(x,y)):_notice("Площадка занята людьми. Отведите бойцов или дождитесь рабочего.");return
@@ -536,6 +550,94 @@ func _focus_worker(id:int):
 func _hire_worker():
 	_notice(state.hire_worker());world._relocate_blocked();world._assign_jobs();state.save_progress();_refresh()
 
+func _on_home_raid_finished(_won:bool):
+	if not world.last_chapter_result:_refresh();return
+	if state.data.chapter.phase in ["won","recover"]:tab="mission"
+	if state.data.chapter.phase=="won":world.paused=true;state.save_progress()
+	_refresh()
+
+func _mission_ui():
+	var phase=state.data.chapter.phase
+	_heading("ПЕРВЫЙ РУБЕЖ")
+	if phase=="supply":_hint("У восточной дороги замечен вооружённый разъезд. Его главарь собирается забрать ваше поселение. Наладьте хозяйство, подготовьте гарнизон и удержите Штаб.")
+	elif phase in ["prepare","ready"]:_hint("Снабжение работает. Теперь выберите способ обороны и соберите гарнизон.")
+	_line();sidebar.add_child(_label(Chapter.title(state.data),19))
+	if phase!="battle":_hint(Chapter.hint(state))
+	if phase=="ready":sidebar.add_child(_button("Встретить разъезд · 6 провианта",_mission_commit,true))
+	if phase in ["countdown","battle"]:sidebar.add_child(_button("Расставить защитный строй",_mission_formation,true))
+	if phase=="battle":
+		var skill=_button("Техника командира · Пробел",_mission_skill,true);sidebar.add_child(skill);live_labels.chapter_skill=skill
+		var status=_label("",16);sidebar.add_child(status);live_labels.chapter=status
+	if phase in ["won","free"]:sidebar.add_child(_button("Продолжить поселение",_mission_continue,true))
+	if phase=="supply":
+		_hint("1. Изучите лесное дело и агротехнику. 2. Поставьте лесопилку рядом с деревьями и ферму у Штаба. Рабочие построят их и доставят продукцию сами.")
+		for id in ["forestry","agriculture"]:
+			if not state.data.research[id]:
+				var t=state.catalog.data.technologies[id]
+				sidebar.add_child(_button("%s · %d монет, %d дерева"%[t.name,t.coins,t.wood],_research.bind(id),true))
+		for id in ["lumber","farm"]:
+			if state.level(id)==0:
+				var exists=state.data.buildings.any(func(b):return b.id==id)
+				if exists:_hint(state.catalog.building(id).name+": строится. Не занимайте проход к Штабу.")
+				else:
+					var def=state.catalog.building(id);var button=_button("Поставить: "+def.name,_mission_place.bind(id))
+					button.disabled=not state.data.research[def.tech];sidebar.add_child(button)
+		_hint("Если работа остановилась, «Люди» покажут занятие каждого жителя. Поставьте P на паузу, чтобы спокойно разобраться.")
+		_hint("Награда этапа: 40 монет и 8 провианта.")
+	elif phase in ["prepare","ready"]:
+		_hint("Разведка: %d противника, включая главаря со щитом. Его здоровье удвоено. Остальные — мечники и лучники."%Chapter.enemy_count(state.data))
+		_hint("Выберите один способ подготовки. Начальные 12 мечников и 8 лучников уже ваши; до 24 нужно ещё четыре бойца.")
+		for entry in [["shields","Щиты и кузница"],["bows","Лучники и укрепления"]]:
+			sidebar.add_child(_button(entry[1],_mission_plan.bind(entry[0]),state.data.chapter.plan==entry[0]))
+		if state.data.chapter.plan=="shields":
+			_hint("Кузница + 2 щитоносца. Остальные места заполните мечниками или лучниками. Щиты принимают стрелы спереди.")
+			if state.level("forge")==0:sidebar.add_child(_button("Поставить кузницу",_mission_place.bind("forge")))
+			else:sidebar.add_child(_button("Нанять щитоносца · 16 монет",_recruit.bind("guard")))
+		else:
+			_hint("Всего 12 лучников и 3 секции стены. Ставьте стены на восточном направлении, оставляйте проход для своих.")
+			sidebar.add_child(_button("Нанять лучника · 11 монет",_recruit.bind("archer")))
+			sidebar.add_child(_button("Поставить секцию стены",_mission_place.bind("wall")))
+		sidebar.add_child(_button("Нанять мечника · 7 монет",_recruit.bind("militia")))
+		_hint("В гарнизоне %d/24 · %s"%[state.army_count(),"щитоносцев %d/2"%state.data.army.guard if state.data.chapter.plan=="shields" else "лучников %d/12"%state.data.army.archer])
+		if phase!="ready":
+			var begin=_button("Встретить разъезд · 6 провианта",_mission_commit,true);begin.disabled=not Chapter.ready_reason(state).is_empty();begin.tooltip_text=Chapter.ready_reason(state);sidebar.add_child(begin)
+	elif phase in ["countdown","battle"]:
+		_hint("Враг придёт СПРАВА. Пехоту держите перед лучниками; не уводите весь гарнизон от Штаба. Главарь отмечен на поле.")
+		for entry in [["all","Выбрать всех"],["militia","Выбрать мечников"],["archer","Выбрать лучников"],["hero","Выбрать командира"]]:sidebar.add_child(_button(entry[1],_world_group.bind(entry[0]),base.command_group==entry[0]))
+		sidebar.add_child(_button("Управление и приказы",_set_tab.bind("orders")))
+	elif phase=="recover":
+		_hint(state.data.personnel.last_report)
+		sidebar.add_child(_button("Пополнить гарнизон",_set_tab.bind("army")))
+		sidebar.add_child(_button("Строительство и ремонт",_set_tab.bind("build")))
+		sidebar.add_child(_button("Повторить оборону · 6 провианта",_mission_commit,true))
+	elif phase in ["won","free"]:
+		sidebar.add_child(_label("Дорога остаётся вашей",22))
+		_hint("Хозяйство обеспечило подготовку, гарнизон выдержал столкновение. Награда главы уже зачислена: 200 монет, 30 дерева, 15 камня, 10 провианта и 60 опыта.")
+		if world.paused:_hint("Игра на паузе. «Продолжить поселение» возобновит время.")
+		_hint("Следующая цель — расширить поселение: склад, новые жители, исследования и разведка внешних запасов. Обычные набеги теперь возобновятся.")
+		sidebar.add_child(_button("Открыть карту мира",_set_tab.bind("map")))
+	if phase in ["supply","prepare","ready","recover"]:
+		sidebar.add_child(_button("Не хватает монет? Поставки",_set_tab.bind("trade")))
+	_update_live()
+
+func _mission_place(id:String):
+	_set_tab("build");_place(id)
+func _mission_plan(plan:String):
+	if state.data.chapter.phase not in ["supply","prepare","ready"]:return
+	state.data.chapter.plan=plan;Chapter.tick(state,0);state.save_progress();_refresh()
+func _mission_commit():
+	_notice(Chapter.commit(state),12);world.sync_army();_refresh()
+func _mission_formation():
+	base.command_group="all";world.command_mode="advance"
+	world.order("guard",world._nearest_open(Vector2(22.5,11.5)*32));world.order("militia",world._nearest_open(Vector2(21.5,12.5)*32))
+	world.order("archer",world._nearest_open(Vector2(18.5,12.5)*32));world.order("hero",world._nearest_open(Vector2(22.0,13.5)*32))
+	base.zoom=1;base.pan=Vector2.ZERO;_notice("Строй выдвигается. Можно изменить позиции ПКМ, выбрав нужную группу.");_refresh()
+func _mission_continue():
+	state.data.chapter.phase="free";world.paused=false;state.save_progress();_set_tab("goals")
+
+func _mission_skill():
+	_notice("Снимите паузу для применения техники." if world.paused else world.battle.skill());_update_live()
+
 func _goals_ui():
 	_heading("Рубежи поселения")
 	_hint("Ваш отряд обустраивает поселение. Сначала наладьте лес, еду и жильё; затем получите доход от поставок и подготовьте гарнизон. Рубежи можно выполнять в разном порядке.")
@@ -573,6 +675,17 @@ func _resolve_selected():
 
 func _update_live():
 	if in_battle:return
+	if live_labels.has("chapter_skill"):
+		var button=live_labels.chapter_skill;var cooldown=world.battle.hero_cooldown
+		button.text="Техника · %.1f с"%cooldown if cooldown>0 else "Техника командира · Пробел"
+		button.disabled=world.paused or cooldown>0 or world.battle.units[0].hp<=0
+	objective_panel.visible=Chapter.enabled(state.data) and state.data.chapter.phase!="free"
+	if objective_panel.visible:objective_text.text=Chapter.title(state.data)+"\n"+Chapter.hint(state)
+	if live_labels.has("chapter"):
+		var leader_alive=false
+		for unit in world.battle.units:
+			if int(unit.uid)==int(state.data.chapter.leader) and unit.hp>0:leader_alive=true
+		live_labels.chapter.text="Противников осталось: %d\nГлаварь: %s\nПрочность Штаба: %d%%"%[world.battle.alive(1),"в бою" if leader_alive else "повержен",roundi(world.battle.keep_hp/world.battle.keep_max*100)]
 	if live_labels.has("expedition"):
 		var e=state.data.regional.expedition
 		if e.is_empty():live_labels.expedition.text="Отряд дома · завершено походов: %d"%state.data.regional.completed
@@ -733,20 +846,20 @@ func _continue_profile(path:String):
 	if not next.load_progress() or next.read_only:start_menu.show_error(next.warning);return
 	_activate_party(next)
 
-func _new_party(seed_value:int,threat:String,title_text:String):
-	var next=profiles.create(seed_value,threat,title_text)
+func _new_party(seed_value:int,threat:String,title_text:String,guided:bool=false):
+	var next=profiles.create(seed_value,threat,title_text,guided)
 	if next==null:start_menu.show_error(profiles.error);return
 	_activate_party(next)
-	_set_tab("goals")
+	_set_tab("mission" if guided else "goals")
 
 func _activate_party(next):
 	state.before_save=Callable()
 	for connection in base.order_requested.get_connections():base.order_requested.disconnect(connection.callable)
 	state=next;world=World.new(state);base.state=state;base.world=world;base.order_requested.connect(world.order)
 	map_view.model=null;map_view.texture=null
-	world.notice.connect(_notice);world.raid_finished.connect(func(_won):_refresh());world.settlement_changed.connect(func():call_deferred("_refresh"))
+	world.notice.connect(_notice);world.raid_finished.connect(_on_home_raid_finished);world.settlement_changed.connect(func():call_deferred("_refresh"))
 	combat.running=false;combat.hide();base.show();result_dialog.hide();retreat_dialog.hide()
-	in_battle=false;benchmark_mode=false;session_started=true;autosave_clock=0;tab="build"
+	in_battle=false;benchmark_mode=false;session_started=true;autosave_clock=0;tab="mission" if Chapter.enabled(state.data) and state.data.chapter.phase!="free" else "build"
 	selected_building=-1;selected_building_uid=-1;selected_source=-1;selected_worker=-1;placement="";base.zoom=1.0;base.pan=Vector2.ZERO
 	base.command_group="hero"
 	start_menu.hide();_refresh()

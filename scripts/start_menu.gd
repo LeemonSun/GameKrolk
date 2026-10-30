@@ -1,11 +1,12 @@
 extends Control
 
 signal continue_requested(path:String)
-signal new_requested(seed_value:int,threat:String,title:String)
+signal new_requested(seed_value:int,threat:String,title:String,guided:bool)
 signal exit_requested
 signal resume_requested
 const Rules=preload("res://scripts/world_rules.gd")
 const Palette=preload("res://scripts/palette.gd")
+const Chapter=preload("res://scripts/chapter.gd")
 var library=[]
 var slots:OptionButton
 var continue_button:Button
@@ -18,6 +19,7 @@ var description:Label
 var message:Label
 var exit_button:Button
 var new_button:Button
+var guided:CheckBox
 var modes=["calm","standard","harsh"]
 
 func label(text:String,size_px:int=16)->Label:
@@ -34,9 +36,9 @@ func _ready():
 	var margin=MarginContainer.new()
 	for side in ["left","right","top","bottom"]:margin.add_theme_constant_override("margin_"+side,22)
 	panel.add_child(margin)
-	var column=VBoxContainer.new();column.add_theme_constant_override("separation",12);margin.add_child(column)
+	var column=VBoxContainer.new();column.add_theme_constant_override("separation",9);margin.add_child(column)
 	var title=label("КРОЛИК / ЦИТАДЕЛЬ",32);title.add_theme_color_override("font_color",Palette.INK);column.add_child(title)
-	column.add_child(label("Мир · строительство · люди · оборона   |   прототип 0.0.8",14))
+	column.add_child(label("Мир · строительство · люди · оборона   |   прототип 0.0.9",14))
 	back_button=button("Вернуться в игру",func():resume_requested.emit());column.add_child(back_button)
 	column.add_child(HSeparator.new());column.add_child(label("Сохранённые партии",18))
 	slots=OptionButton.new();slots.custom_minimum_size.y=42;slots.item_selected.connect(_select_slot);column.add_child(slots)
@@ -52,7 +54,9 @@ func _ready():
 	for id in modes:threat.add_item(Rules.MODES[id].name)
 	threat.select(1);threat.item_selected.connect(func(_index):_mode_hint());column.add_child(threat)
 	description=label("",14);column.add_child(description);_mode_hint()
-	new_button=button("Начать новую игру",_new_game);column.add_child(new_button)
+	guided=CheckBox.new();guided.text="Первый рубеж — начать с цели и подготовки обороны";guided.button_pressed=true;guided.tooltip_text="Первый бой начнётся по вашей готовности; затем обычная жизнь поселения. Снимите флажок для свободной игры.";column.add_child(guided)
+	new_button=button("Начать «Первый рубеж»",_new_game);column.add_child(new_button)
+	guided.toggled.connect(func(_value):_mode_hint());_mode_hint()
 	column.add_child(label("Новая партия создаётся в отдельном файле. Предыдущие поселения сохраняются.",13))
 	message=label("",14);message.add_theme_color_override("font_color",Palette.INK);column.add_child(message)
 	exit_button=button("Выход",func():exit_requested.emit());column.add_child(exit_button)
@@ -86,8 +90,15 @@ func _new_game():
 	var text=seed_input.text.strip_edges()
 	if not text.is_valid_int() or int(text)<1 or int(text)>2147483647:
 		message.text="Для зерна карты введите целое число от 1 до 2147483647.";return
-	new_requested.emit(int(text),modes[threat.selected],name_input.text)
+	new_requested.emit(int(text),modes[threat.selected],name_input.text,guided.button_pressed)
 
 func _random_seed():seed_input.text=str(randi_range(1,2147483647))
-func _mode_hint():description.text=Rules.MODES[modes[threat.selected]].hint
+func _mode_hint():
+	var mode=modes[threat.selected]
+	if guided!=null and guided.button_pressed:
+		description.text="Первый рубеж: %d противников, начало по вашей готовности. После эпизода — режим «%s», набеги каждые %d мин."%[Chapter.enemy_count({"rules":{"threat":mode}}),Rules.MODES[mode].name,int(Rules.MODES[mode].interval)/60]
+		if new_button!=null:new_button.text="Начать «Первый рубеж»"
+	else:
+		description.text=Rules.MODES[mode].hint
+		if new_button!=null:new_button.text="Начать свободную игру"
 func show_error(text:String):message.text=text

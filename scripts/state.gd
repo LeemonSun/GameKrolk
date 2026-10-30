@@ -9,7 +9,8 @@ const Logistics=preload("res://scripts/logistics.gd")
 const Commerce=preload("res://scripts/commerce.gd")
 const Personnel=preload("res://scripts/personnel.gd")
 const Regional=preload("res://scripts/regional_world.gd")
-const SAVE_VERSION=8
+const Chapter=preload("res://scripts/chapter.gd")
+const SAVE_VERSION=9
 var catalog=Catalog.new()
 var save_path="user://progress.json"
 var data:Dictionary={}
@@ -34,9 +35,10 @@ func reset():
 	Commerce.initialize(data)
 	Personnel.initialize(data)
 	Regional.initialize(data)
+	Chapter.initialize(data)
 	data["rules"]={"threat":"standard"}
 
-func new_game(seed_value:int,threat:String,title:String)->bool:
+func new_game(seed_value:int,threat:String,title:String,guided:bool=false)->bool:
 	if seed_value<1 or seed_value>2147483647 or threat not in WorldRules.MODES or title.strip_edges().length()>40:return false
 	reset();data.world=WorldData.generate(seed_value);Settlement.initialize(data,catalog)
 	Personnel.initialize(data)
@@ -44,6 +46,7 @@ func new_game(seed_value:int,threat:String,title:String)->bool:
 	data.selected_hero="warden"
 	data.rules.threat=threat;data.world.raid_in=WorldRules.MODES[threat].first
 	data["profile"]={"name":title.strip_edges() if not title.strip_edges().is_empty() else "Новое поселение","created":Time.get_unix_time_from_system()}
+	if guided:Chapter.begin(data)
 	return true
 
 func _valid(d:Variant)->bool:
@@ -90,7 +93,7 @@ func _valid(d:Variant)->bool:
 		if not combat.has("complete") and combat.get("legacy",false)!=true:return false
 		for unit in combat.units:
 			if not unit.has("uid"):return false
-	return Settlement.valid(d,catalog) and Commerce.valid(d) and Personnel.valid(d) and Regional.valid(d)
+	return Settlement.valid(d,catalog) and Commerce.valid(d) and Personnel.valid(d) and Regional.valid(d) and Chapter.valid(d)
 
 func load_progress()->bool:
 	if not FileAccess.file_exists(save_path) and not FileAccess.file_exists(save_path+".bak"):return true
@@ -152,9 +155,10 @@ func _normalize():
 		for key in ["index","crew"]:expedition[key]=int(expedition[key])
 		for key in ["wood","stone"]:expedition.cargo[key]=int(expedition.cargo[key])
 	for key in data.stats:data.stats[key]=int(data.stats[key])
+	for key in ["attempts","leader","wood_start","food_start"]:data.chapter[key]=int(data.chapter[key])
 
 func _migrate(value:Variant)->Variant:
-	if not value is Dictionary or value.get("version") not in [1,1.0,2,2.0,3,3.0,4,4.0,5,5.0,6,6.0,7,7.0]:return value
+	if not value is Dictionary or value.get("version") not in [1,1.0,2,2.0,3,3.0,4,4.0,5,5.0,6,6.0,7,7.0,8,8.0]:return value
 	var migrated=value.duplicate(true)
 	if migrated.version==1:
 		migrated.wood=migrated.get("wood",migrated.get("materials",180));migrated.erase("materials")
@@ -170,6 +174,7 @@ func _migrate(value:Variant)->Variant:
 	Commerce.initialize(migrated)
 	Personnel.initialize(migrated)
 	Regional.initialize(migrated)
+	Chapter.initialize(migrated)
 	if not migrated.world.get("combat",{}).is_empty() and not migrated.world.combat.has("complete"):migrated.world.combat["legacy"]=true
 	return migrated
 

@@ -1,4 +1,5 @@
 extends Control
+const Chapter=preload("res://scripts/chapter.gd")
 
 signal cell_clicked(cell:Vector2i)
 signal order_requested(group:String,pos:Vector2)
@@ -114,8 +115,12 @@ func _draw():
 			var p=rect.position+u.pos*factor
 			if u.kind=="hero" and u.hp>0:draw_arc(p+Vector2(0,3)*factor,21*factor,0,TAU,24,Color("dbc387"),maxf(1,factor*2))
 			var attack=1.0-u.attack_left/u.windup if u.attack_left>0 and u.windup>0 else 0.0
-			Art.person(self,p,u.kind,int(u.team),world.battle.time*10+u.id if u.moving else 0,u.facing,attack,float(u.flash),hero_color,u.hp<=0,factor)
-			if u.hp>0 and u.hp<u.max_hp:
+			var leader=int(u.uid)==int(state.data.chapter.leader) and state.data.chapter.phase=="battle"
+			Art.person(self,p,u.kind,int(u.team),world.battle.time*10+u.id if u.moving else 0,u.facing,attack,float(u.flash),hero_color,u.hp<=0,factor*(1.35 if leader else 1.0))
+			if leader and u.hp>0:
+				draw_arc(p,20*factor,0,TAU,24,Color("e3b7ad"),maxf(1,2*factor))
+				draw_string(ThemeDB.fallback_font,p+Vector2(-25,-58)*factor,"Главарь",HORIZONTAL_ALIGNMENT_LEFT,-1,14,Color("f2d1c8"))
+			if u.hp>0 and (u.hp<u.max_hp or leader):
 				var bar_y=-56 if u.kind=="hero" else -38
 				draw_rect(Rect2(p+Vector2(-9,bar_y)*factor,Vector2(18,3)*factor),Color("25332d"))
 				draw_rect(Rect2(p+Vector2(-9,bar_y)*factor,Vector2(18*u.hp/u.max_hp,3)*factor),Color("accf8d") if u.team==0 else Color("d9957d"))
@@ -133,6 +138,7 @@ func _draw():
 		if placement.is_empty():draw_rect(Rect2(rect.position+Vector2(hover)*cell,Vector2.ONE*cell),Color(0.9,0.8,0.5,0.16))
 		else:
 			var def=state.catalog.building(placement);var reason=state.can_build(placement,hover)
+			if reason.is_empty():reason=Chapter.placement_reason(state,placement,hover)
 			for x in range(hover.x,hover.x+int(def.width)):
 				for y in range(hover.y,hover.y+int(def.height)):
 					if world.occupied(Vector2i(x,y)):reason="Площадка занята людьми."
@@ -141,6 +147,10 @@ func _draw():
 			draw_rect(area,Color(color,0.25));draw_rect(area,color,false,2)
 			var hint="ЛКМ — заложить · "+str(int(def.width))+"×"+str(int(def.height)) if reason.is_empty() else reason
 			draw_string(ThemeDB.fallback_font,Vector2(18,28),hint,HORIZONTAL_ALIGNMENT_LEFT,size.x-30,14,color)
+	if state.data.chapter.phase in ["countdown","battle"]:
+		var entry=rect.position+Vector2(29.5,11.5)*cell
+		draw_arc(entry,cell*0.7,0,TAU,24,Color("c48c80"),2)
+		draw_string(ThemeDB.fallback_font,entry+Vector2(-95,-cell*2.5),"ВОСТОЧНАЯ ДОРОГА",HORIZONTAL_ALIGNMENT_LEFT,-1,13,Color("e2b2a6"))
 	var controls="ПКМ — приказ · H — держать позицию · S — отменить маршрут · P — пауза" if show_orders else "Колесо — масштаб · средняя кнопка — камера · ПКМ — приказ · P — пауза · Пробел — техника"
 	draw_string(ThemeDB.fallback_font,Vector2(18,size.y-16),controls,HORIZONTAL_ALIGNMENT_LEFT,-1,12,Palette.MUTED)
 

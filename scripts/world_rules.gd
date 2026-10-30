@@ -1,4 +1,5 @@
 extends RefCounted
+const Chapter=preload("res://scripts/chapter.gd")
 
 const MODES={
 	"calm":{"name":"Спокойный","hint":"Первый набег через 6 минут, затем каждые 6 минут. Небольшие слабые отряды: больше времени на строительство.","first":360.0,"interval":360.0,"base":6,"growth":2,"extra":26,"hp":0.75,"damage":0.5},
@@ -10,6 +11,9 @@ static func mode(data:Dictionary)->String:return data.get("rules",{}).get("threa
 static func settings(data:Dictionary)->Dictionary:return MODES[mode(data)]
 
 static func forecast(data:Dictionary)->String:
+	if data.has("chapter") and Chapter.active(data):
+		var count=Chapter.enemy_count(data);var archers=(count-1)/3
+		return "Разъезд с востока: %d противника — главарь со щитом, %d лучников, %d мечников. Начало после подготовки и подтверждения обороны."%[count,archers,count-archers-1]
 	var index=int(data.world.raid_number)%3
 	var count=int(settings(data).base)+mini(int(settings(data).extra),int(data.world.raids_defeated)*int(settings(data).growth))
-	return ["Налётчики: %d. Смешанный отряд, основа — ближний бой.","Стрелковый отряд: %d. Большинство — лучники; используйте укрытия и сближение.","Тяжёлый отряд: %d. Стражи в первой линии; подготовьте поддержку и запас прочности."][index]%count
+	return ["Налётчики: %d. Смешанный отряд, основа — ближний бой.","Стрелковый отряд: %d. Большинство — лучники; используйте укрытия и сближение.","Тяжёлый отряд: %d. Щитоносцы в первой линии; подготовьте поддержку и запас прочности."][index]%count

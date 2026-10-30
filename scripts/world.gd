@@ -1,4 +1,6 @@
 extends RefCounted
+const Chapter=preload("res://scripts/chapter.gd")
+var last_chapter_result=false
 
 signal notice(text:String)
 signal raid_finished(won:bool)
@@ -326,19 +328,27 @@ func _work(w:Dictionary,dt:float):
 
 func start_raid()->String:
 	if state.data.world.raid_active:return "Набег уже идёт."
+	var chapter_battle=Chapter.active(state.data)
+	if chapter_battle and not Chapter.due(state.data):return "Подтвердите начало обороны в «Первом рубеже»."
+	if chapter_battle:state.data.chapter.phase="battle"
 	_compact_army()
 	state.data.world.raid_active=true;state.data.world.raid_number+=1;raid_time=0.0
 	var rules=WorldRules.settings(state.data)
 	var count=int(rules.base)+mini(int(rules.extra),int(state.data.world.raids_defeated)*int(rules.growth))
+	if chapter_battle:count=Chapter.enemy_count(state.data)
 	for i in count:
 		var kind="archer" if i%7==0 else "militia"
 		var formation=int(state.data.world.raid_number-1)%3
 		if formation==1:kind="archer" if i%3!=0 else "militia"
 		elif formation==2:kind="guard" if i%3==0 else ("archer" if i%5==0 else "militia")
+		if chapter_battle:kind="guard" if i==0 else ("archer" if i%3==0 else "militia")
 		var pos=Vector2((WorldData.WIDTH-2)*32+float(i%2)*8,home().y+float(i-count/2)*10)
 		pos.y=clampf(pos.y,home().y-28,home().y+28)
+		if chapter_battle:pos=Vector2((WorldData.WIDTH-2)*32-float(i/5)*20-(40 if i==0 else 0),home().y+float(i%5-2)*14)
 		var def=state.catalog.troop(kind).duplicate();def.hp*=float(rules.hp);def.damage*=float(rules.damage)
-		battle._add_unit(kind,1,_nearest_open(pos),def);_route_unit(battle.units[-1],home())
+		if chapter_battle and i==0:def.hp*=2.0;def.damage*=1.4
+		battle._add_unit(kind,1,_unit_spawn(pos) if chapter_battle else _nearest_open(pos),def);_route_unit(battle.units[-1],home())
+		if chapter_battle and i==0:state.data.chapter.leader=int(battle.units[-1].uid)
 	flush();state.save_progress();notice.emit("Набег! Вражеский отряд идёт с востока. Защитите Штаб.")
 	return "Вражеский отряд вошёл в регион."
 
@@ -352,6 +362,8 @@ func step(dt:float):
 
 func _tick(dt:float):
 	state.data.world.clock+=dt;job_timer+=dt
+	var chapter_message=Chapter.tick(state,dt)
+	if not chapter_message.is_empty():notice.emit(chapter_message);settlement_changed.emit()
 	if floori(state.data.world.clock/300.0)!=floori((state.data.world.clock-dt)/300.0):_regrow_wood()
 	var delivery=Commerce.tick(state,dt)
 	if not delivery.is_empty():notice.emit(delivery);settlement_changed.emit()
@@ -376,10 +388,10 @@ func _tick(dt:float):
 		if battle.alive(1)==0:_end_raid(true)
 		elif battle.keep_hp<=0 or raid_time>240:_end_raid(false)
 	else:
-		state.data.world.raid_in=maxf(0,float(state.data.world.raid_in)-dt)
+		if not Chapter.active(state.data):state.data.world.raid_in=maxf(0,float(state.data.world.raid_in)-dt)
 		for u in battle.units:
 			if u.team==0 and u.hp>0:u.hp=minf(u.max_hp,u.hp+dt*1.5)
-		if state.data.world.raid_in<=0:start_raid()
+		if Chapter.due(state.data) or (not Chapter.active(state.data) and state.data.world.raid_in<=0):start_raid()
 
 func _end_raid(won:bool):
 	if not state.data.world.raid_active:return
@@ -402,6 +414,9 @@ func _end_raid(won:bool):
 	if battle.units[0].hp<=0:
 		battle.units[0].hp=battle.units[0].max_hp*0.5;battle.units[0].pos=_nearest_open(home()+Vector2(-30,30));battle.units[0].prev=battle.units[0].pos
 	if state.army_count()==0:state.data.army.militia=3
+	var chapter_result=Chapter.finish(state,won)
+	last_chapter_result=not chapter_result.is_empty()
+	if not chapter_result.is_empty():notice.emit(chapter_result);settlement_changed.emit()
 	state.automate();sync_army();flush();state.save_progress();raid_finished.emit(won)
 
 func repair_quote(uid:int)->Dictionary:

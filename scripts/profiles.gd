@@ -50,7 +50,7 @@ func remember(path:String)->bool:
 	file.store_string(JSON.stringify({"path":path}));file.close()
 	return DirAccess.rename_absolute(index_path+".tmp",index_path)==OK
 
-func create(seed_value:int,threat:String,title:String):
+func create(seed_value:int,threat:String,title:String,guided:bool=false):
 	error=""
 	if seed_value<1 or seed_value>2147483647 or threat not in Rules.MODES:error="Проверьте зерно карты и уровень угрозы.";return null
 	if title.strip_edges().length()>40:error="Название поселения должно быть не длиннее 40 символов.";return null
@@ -63,5 +63,5 @@ func create(seed_value:int,threat:String,title:String):
 		path=""
 	if path.is_empty():error="Не удалось выбрать имя файла сохранения.";return null
 	var s=State.new(path)
-	if not s.new_game(seed_value,threat,title) or not s.save_progress():error=s.warning if not s.warning.is_empty() else "Не удалось сохранить новую партию.";return null
+	if not s.new_game(seed_value,threat,title,guided) or not s.save_progress():error=s.warning if not s.warning.is_empty() else "Не удалось сохранить новую партию.";return null
 	return s

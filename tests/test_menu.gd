@@ -43,7 +43,7 @@ func run():
 	for i in 3:await process_frame
 	check(app.state.data.world.clock==clock and app.start_menu.back_button.visible,"in-game menu pauses simulation and offers return")
 	app.start_menu.seed_input.text="271828";app.start_menu.name_input.text="Острый берег";app.start_menu.threat.select(2);app.start_menu.threat.item_selected.emit(2);app.start_menu._new_game()
-	check(app.start_menu.description.text==Rules.MODES.harsh.hint,"mode dropdown updates explanation")
+	check(app.start_menu.description.text.contains("28 противников") and app.start_menu.description.text.contains("Опасный"),"guided mode dropdown updates encounter and post-episode threat")
 	var second_path=app.state.save_path
 	check(second_path!=first_path and FileAccess.get_file_as_string(first_path)==first_text,"another game preserves previous settlement byte for byte")
 	check(Rules.mode(app.state.data)=="harsh" and app.state.data.world.raid_in>89 and app.state.data.world.raid_in<=90,"dangerous mode starts with its shorter raid timer")
