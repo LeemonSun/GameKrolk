@@ -58,5 +58,11 @@ func run():
 	gate.hp=80.0;app.world.repair(int(gate.uid));app._inspect_building(int(gate.uid))
 	await process_frame;await RenderingServer.frame_post_draw
 	root.get_texture().get_image().save_png("res://work/ui-repair-small.png")
+	app._set_tab("trade")
+	await process_frame;await RenderingServer.frame_post_draw
+	root.get_texture().get_image().save_png("res://work/ui-trade-small.png")
+	app._set_tab("goals")
+	await process_frame;await RenderingServer.frame_post_draw
+	root.get_texture().get_image().save_png("res://work/ui-progression-small.png")
 	print("WORLD_UI_READY "+JSON.stringify({"wood":app.state.data.wood,"stone":app.state.data.stone,"raid_active":app.state.data.world.raid_active,"actors":app.world.battle.units.size()}))
 	quit()

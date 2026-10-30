@@ -18,6 +18,7 @@ const World=preload("res://scripts/world.gd")
 const BattleView=preload("res://scripts/battle_view.gd")
 const Palette=preload("res://scripts/palette.gd")
 const Logistics=preload("res://scripts/logistics.gd")
+const Commerce=preload("res://scripts/commerce.gd")
 const BG=Palette.BG
 const PANEL=Palette.PANEL
 const ACCENT=Palette.ACCENT
@@ -67,7 +68,7 @@ func _ready():
 	if test_mode:session_started=true;start_menu.hide()
 	else:_open_main_menu()
 	if not state.warning.is_empty():_notice(state.warning,15)
-	print("GAMEKROLK_READY "+JSON.stringify({"version":"0.0.5","save":ProjectSettings.globalize_path(state.save_path),"renderer":RenderingServer.get_current_rendering_method()}))
+	print("GAMEKROLK_READY "+JSON.stringify({"version":"0.0.6","save":ProjectSettings.globalize_path(state.save_path),"renderer":RenderingServer.get_current_rendering_method()}))
 
 func _style(color:Color,border:Color=Color.TRANSPARENT,radius:int=10)->StyleBoxFlat:
 	var s=StyleBoxFlat.new();s.bg_color=color
@@ -98,7 +99,7 @@ func _setup_ui():
 	var header=HBoxContainer.new();root.add_child(header)
 	var brand=VBoxContainer.new();brand.size_flags_horizontal=Control.SIZE_EXPAND_FILL;brand.add_theme_constant_override("separation",1);header.add_child(brand)
 	title=_label("КРОЛИК  /  ЦИТАДЕЛЬ",29,ACCENT);brand.add_child(title)
-	subtitle=_label("ЖИВОЙ УЧАСТОК    ·    прототип 0.0.5    ·    хозяйство и оборона",12,MUTED);brand.add_child(subtitle)
+	subtitle=_label("ЖИВОЙ УЧАСТОК    ·    прототип 0.0.6    ·    хозяйство и оборона",12,MUTED);brand.add_child(subtitle)
 	header.add_child(_button("Сохранить",func():_notice("Прогресс сохранён." if state.save_progress() else state.warning)))
 	header.add_child(_button("Меню",_open_main_menu))
 	header.add_child(_button("Во весь экран  F11",_fullscreen))
@@ -130,16 +131,19 @@ func _refresh():
 	_update_resources();live_labels.clear();_clear(toolbar);_clear(sidebar)
 	if in_battle:_battle_ui();return
 	if not state.data.world.raid_active:world.sync_army()
-	for entry in [["build","Строить"],["people","Люди"],["logistics","Снабжение"],["goals","Рубежи"],["orders","Приказы"],["heroes","Герои"],["army","Армия"],["officers","Должности"],["tech","Технологии"]]:
+	for entry in [["build","Строить"],["people","Люди"],["logistics","Снабжение"],["trade","Поставки"],["goals","Рубежи"],["orders","Приказы"],["heroes","Герои"],["army","Армия"],["officers","Должности"],["tech","Технологии"]]:
 		var b=_button(entry[1],_set_tab.bind(entry[0]),tab==entry[0]);toolbar.add_child(b)
 	var spacer=Control.new();spacer.size_flags_horizontal=Control.SIZE_EXPAND_FILL;toolbar.add_child(spacer)
 	toolbar.add_child(_button("Продолжить" if world.paused else "Пауза  P",_pause_world))
-	toolbar.add_child(_button("Полигон",func():_start_battle("hero")))
-	toolbar.add_child(_button("Проверить набег",_trigger_raid,true))
+	toolbar.add_child(_button("Разведка",func():_notice(preload("res://scripts/world_rules.gd").forecast(state.data),15)))
+	if "--test-mode" in OS.get_cmdline_user_args() or "--developer" in OS.get_cmdline_user_args():
+		toolbar.add_child(_button("Полигон",func():_start_battle("hero")))
+		toolbar.add_child(_button("Проверить набег",_trigger_raid,true))
 	match tab:
 		"build":_build_ui()
 		"people":_people_ui()
 		"logistics":_logistics_ui()
+		"trade":_trade_ui()
 		"goals":_goals_ui()
 		"orders":_orders_ui()
 		"heroes":_heroes_ui()
@@ -479,6 +483,9 @@ func _hire_worker():
 
 func _goals_ui():
 	_heading("Рубежи поселения")
+	_hint("Ваш отряд обустраивает поселение. Сначала наладьте лес, еду и жильё; затем получите доход от поставок и подготовьте гарнизон. Рубежи можно выполнять в разном порядке.")
+	sidebar.add_child(_button("Перейти к строительству",_set_tab.bind("build"),true))
+	sidebar.add_child(_button("Поставки и доход",_set_tab.bind("trade")))
 	_hint("Это задачи обучающего среза, а не сюжетная кампания. Каждый рубеж даёт награду один раз.")
 	for goal in Settlement.GOALS:
 		var done=goal.id in state.data.achieved
@@ -486,6 +493,7 @@ func _goals_ui():
 		_hint(goal.hint)
 		_hint("Получено: %d монет."%goal.reward if done else "Награда: %d монет."%goal.reward);_line()
 	_hint("Монеты также приходят за отражённые набеги. Потери армии остаются, а поселение продолжает работать между нападениями.")
+	_hint(preload("res://scripts/world_rules.gd").forecast(state.data))
 
 func _ask_demolish():
 	if selected_building<0 or selected_building>=state.data.buildings.size():return
@@ -534,6 +542,9 @@ func _update_live():
 			var current=int(state.data[entry[0]]);var capacity=Logistics.capacity(state.data,entry[0])
 			lines.append("%s: %d / %d%s"%[entry[1],current,capacity," · нет места" if current>=capacity else ""])
 		live_labels.storage.text="\n".join(lines)
+	if live_labels.has("trade"):
+		var cargo=state.data.commerce.cargo
+		live_labels.trade.text="Новые заказы через %d с\nЭкспортов: %d · доход: %d монет\n%s"%[ceili(180-state.data.commerce.window),state.data.commerce.orders,state.data.commerce.income,"Нет поставки в пути" if cargo.is_empty() else (Commerce.OFFERS[cargo.id].name+" · "+("ждёт конца нападения" if cargo.remaining<=0 else str(ceili(cargo.remaining))+" с"))]
 	if live_labels.has("logistics"):
 		var carriers=0;var cargo=0;var stalled=0
 		for w in state.data.world.workers:
@@ -559,6 +570,23 @@ func _logistics_ui():
 func _inspect_building(uid:int):
 	selected_building_uid=uid;tab="build";placement="";selected_source=-1;_refresh()
 
+func _trade_ui():
+	_heading("Местные поставки")
+	_hint("Хозяйство даёт доход независимо от побед. Один обоз в пути; каждый заказ доступен раз в три игровых минуты. Отправка расходует запас сразу, оплата приходит после возвращения.")
+	var status=_label("",16,ACCENT);live_labels.trade=status;sidebar.add_child(status)
+	_line()
+	var names={"wood":"дерева","stone":"камня","food":"еды","coins":"монет"}
+	for id in Commerce.OFFERS:
+		var offer=Commerce.OFFERS[id]
+		sidebar.add_child(_label(offer.name,18))
+		_hint("Отдать %d %s → получить %d %s"%[offer.amount,names[offer.take],offer.reward,names[offer.give]])
+		var button=_button("Отправить поставку",_send_trade.bind(id));button.tooltip_text=Commerce.reason(state,id);sidebar.add_child(button)
+		_line()
+	_hint("Обозы здесь считаются по времени, отдельной фигурки на карте пока нет. Покупка и награды могут временно превысить предел склада; новая добыча ждёт места.")
+	_update_live()
+
+func _send_trade(id:String):_notice(Commerce.send(state,id));_refresh()
+
 func _open_main_menu():
 	if start_menu==null:return
 	var save_error=""
@@ -582,6 +610,7 @@ func _new_party(seed_value:int,threat:String,title_text:String):
 	var next=profiles.create(seed_value,threat,title_text)
 	if next==null:start_menu.show_error(profiles.error);return
 	_activate_party(next)
+	_set_tab("goals")
 
 func _activate_party(next):
 	state.before_save=Callable()

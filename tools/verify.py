@@ -13,6 +13,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('--godot', type=Path)
     parser.add_argument('--gui', action='store_true', help='Also render and capture the real UI')
+    parser.add_argument('--stress', action='store_true', help='Run six ordinary-budget twenty-minute sessions')
     args = parser.parse_args()
     default = ROOT.parent / 'local/godot/Godot_v4.7.2-stable_win64_console.exe'
     engine = args.godot or Path(os.environ.get('GAMEKROLK_GODOT', str(default)))
@@ -24,15 +25,17 @@ def main() -> int:
     (work / '.gdignore').touch()
     json.loads((ROOT / 'data/game.json').read_text(encoding='utf-8'))
     cases = [('import', ['--headless', '--editor', '--import'])]
-    cases += [(name, ['--headless', '--script', f'res://tests/{name}.gd']) for name in ['test_core', 'test_world', 'test_settlement', 'test_cycle', 'test_simulation', 'test_orders', 'test_logistics', 'test_soak']]
+    cases += [(name, ['--headless', '--script', f'res://tests/{name}.gd']) for name in ['test_core', 'test_world', 'test_settlement', 'test_cycle', 'test_simulation', 'test_orders', 'test_logistics', 'test_crisis', 'test_soak']]
     if args.gui:
         cases.append(('test_world_ui', ['--script', 'res://tests/test_world_ui.gd']))
         cases.append(('test_menu', ['--script', 'res://tests/test_menu.gd']))
+    if args.stress:
+        cases.append(('test_session', ['--headless', '--script', 'res://tests/test_session.gd']))
     results = []
     for name, options in cases:
         command = [str(engine), '--path', str(ROOT), *options, '--log-file', str(work / f'{name}.log'), '--', '--test-mode']
         try:
-            run = subprocess.run(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120)
+            run = subprocess.run(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=300 if name == 'test_session' else 120)
             output = run.stdout.decode('utf-8', errors='replace')
             (work / f'{name}-console.log').write_text(output, encoding='utf-8')
             errors = [line for line in output.splitlines() if line.startswith(('ERROR:', 'SCRIPT ERROR:'))]
@@ -40,7 +43,7 @@ def main() -> int:
             results.append({'case': name, 'passed': passed, 'exit_code': run.returncode, 'errors': errors})
             print(f'{name}: {"PASS" if passed else "FAIL"}')
             for line in output.splitlines():
-                if line.startswith(('CORE_TESTS', 'WORLD_TESTS', 'SETTLEMENT_TESTS', 'CYCLE_TESTS', 'SIMULATION_TESTS', 'ORDER_TESTS', 'LOGISTICS_TESTS', 'SOAK_TESTS', 'WORLD_UI_READY', 'MENU_TESTS')):
+                if line.startswith(('CORE_TESTS', 'WORLD_TESTS', 'SETTLEMENT_TESTS', 'CYCLE_TESTS', 'SIMULATION_TESTS', 'ORDER_TESTS', 'LOGISTICS_TESTS', 'CRISIS_TESTS', 'SOAK_TESTS', 'WORLD_UI_READY', 'MENU_TESTS', 'SESSION_TESTS', 'SESSION_RUN')):
                     print(line)
             if not passed:
                 print(output[-6000:])

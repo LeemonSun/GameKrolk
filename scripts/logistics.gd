@@ -18,7 +18,7 @@ static func solid(b:Dictionary)->bool:
 	return not (b.id=="gate" and b.built and b.get("gate_open",false))
 
 static func repair_quote(b:Dictionary,current:float,maximum:float,catalog)->Dictionary:
-	if not b.built or b.target_level!=b.level or not b.get("repair",{}).is_empty() or current>=maximum:return {}
+	if not b.built or b.target_level!=b.level or not b.get("repair",{}).is_empty() or maximum-current<0.001:return {}
 	var def=catalog.building(b.id);var missing=maximum-current;var fraction=missing/maximum
 	return {"wood":maxi(1,ceili(float(def.wood)*int(b.level)*0.5*fraction)),
 		"stone":ceili(float(def.stone)*int(b.level)*0.5*fraction),

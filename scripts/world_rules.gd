@@ -8,3 +8,8 @@ const MODES={
 
 static func mode(data:Dictionary)->String:return data.get("rules",{}).get("threat","standard")
 static func settings(data:Dictionary)->Dictionary:return MODES[mode(data)]
+
+static func forecast(data:Dictionary)->String:
+	var index=int(data.world.raid_number)%3
+	var count=int(settings(data).base)+mini(int(settings(data).extra),int(data.world.raids_defeated)*int(settings(data).growth))
+	return ["Налётчики: %d. Смешанный отряд, основа — ближний бой.","Стрелковый отряд: %d. Большинство — лучники; используйте укрытия и сближение.","Тяжёлый отряд: %d. Стражи в первой линии; подготовьте поддержку и запас прочности."][index]%count

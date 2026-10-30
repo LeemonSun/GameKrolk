@@ -79,6 +79,8 @@ func run():
 	loaded=State.new(s.save_path);check(loaded.load_progress() and A.same(s.data,loaded.data),"repair and navigation snapshot roundtrip")
 	restored=World.new(loaded);advance(w,15);advance(restored,15)
 	check(gate.repair.is_empty() and is_equal_approx(gate.hp,180),"repair completes to max")
+	stock=int(s.data.wood);gate.hp=180.0-1e-12;w.repair(uid)
+	check(s.data.wood==stock and gate.repair.is_empty(),"floating point dust cannot charge another repair")
 	check(is_equal_approx(loaded.building_uid(uid).hp,gate.hp),"loaded repair reaches same result")
 	gate.hp=90.0;quote=w.repair_quote(uid);stock=int(s.data.wood);w.repair(uid);w.cancel_repair(uid)
 	check(s.data.wood==stock and gate.hp==90,"unstarted repair cancellation refunds exactly")
@@ -91,7 +93,7 @@ func run():
 	for b in old.buildings:b.erase("repair");b.erase("gate_open")
 	for worker in old.world.workers:worker.erase("depot")
 	var migrated=s._migrate(old)
-	check(s._valid(migrated) and migrated.version==5,"format 4 migration adds logistics without resetting progress")
+	check(s._valid(migrated) and migrated.version==State.SAVE_VERSION,"format 4 migration adds logistics without resetting progress")
 	var bad=s.data.duplicate(true);bad.buildings[0].gate_open=true
 	check(not s._valid(bad),"non-gate open flag rejected")
 	bad=s.data.duplicate(true);bad.buildings[0].repair={"wood":1,"stone":0,"remaining":10.0,"total":5.0,"rate":1.0}

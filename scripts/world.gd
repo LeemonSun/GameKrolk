@@ -13,6 +13,7 @@ const WorldData=preload("res://scripts/world_data.gd")
 const WorldRules=preload("res://scripts/world_rules.gd")
 const Snapshot=preload("res://scripts/combat_snapshot.gd")
 const Logistics=preload("res://scripts/logistics.gd")
+const Commerce=preload("res://scripts/commerce.gd")
 var command_mode="advance"
 var navigation_signature=0
 var state
@@ -267,6 +268,9 @@ func _work(w:Dictionary,dt:float):
 				else:building.hp+=restored
 				building.repair.remaining=maxf(0,float(building.repair.remaining)-restored)
 				if building.repair.remaining<0.00001 or current+restored>=maximum-0.00001:
+					if maximum-current-restored<0.00001:
+						if building.id=="hq":battle.keep_hp=maximum
+						else:building.hp=maximum
 					building.repair={};_release(w);notice.emit("Ремонт завершён: "+state.catalog.building(building.id).name);settlement_changed.emit()
 				return
 			building.work_done=minf(required_work(building),float(building.work_done)+dt)
@@ -302,6 +306,9 @@ func start_raid()->String:
 	var count=int(rules.base)+mini(int(rules.extra),int(state.data.world.raids_defeated)*int(rules.growth))
 	for i in count:
 		var kind="archer" if i%7==0 else "militia"
+		var formation=int(state.data.world.raid_number-1)%3
+		if formation==1:kind="archer" if i%3!=0 else "militia"
+		elif formation==2:kind="guard" if i%3==0 else ("archer" if i%5==0 else "militia")
 		var pos=Vector2((WorldData.WIDTH-2)*32+float(i%2)*8,home().y+float(i-count/2)*10)
 		pos.y=clampf(pos.y,home().y-28,home().y+28)
 		var def=state.catalog.troop(kind).duplicate();def.hp*=float(rules.hp);def.damage*=float(rules.damage)
@@ -319,6 +326,9 @@ func step(dt:float):
 
 func _tick(dt:float):
 	state.data.world.clock+=dt;job_timer+=dt
+	if floori(state.data.world.clock/300.0)!=floori((state.data.world.clock-dt)/300.0):_regrow_wood()
+	var delivery=Commerce.tick(state,dt)
+	if not delivery.is_empty():notice.emit(delivery);settlement_changed.emit()
 	chase_clock+=dt
 	if chase_clock>=0.5:chase_clock=0;_update_chase_paths()
 	if job_timer>2:job_timer=0;_assign_jobs();_check_goals()
@@ -337,7 +347,9 @@ func _tick(dt:float):
 		if state.data.world.raid_in<=0:start_raid()
 
 func _end_raid(won:bool):
+	if not state.data.world.raid_active:return
 	state.data.world.raid_active=false;state.data.world.raid_in=WorldRules.settings(state.data).interval
+	state.data["wins" if won else "losses"]+=1
 	battle.projectiles.clear()
 	state.data.army=battle.survivors()
 	if won:
@@ -449,6 +461,16 @@ func _food_tick(dt:float):
 	if state.data.world.food_clock>=60:
 		state.data.world.food_clock-=60;state.data.food=maxi(0,int(state.data.food)-food_need())
 		if state.data.food==0:notice.emit("Еда закончилась. Рабочие трудятся с 60% скорости. Нужны ферма или покупка провианта.")
+
+func _regrow_wood():
+	for source in state.data.world.sources:
+		if source.kind!="wood" or source.amount>0:continue
+		var cell=Vector2i(int(source.x),int(source.y))
+		if state.building_at(cell)>=0 or state.data.world.tiles[cell.y*32+cell.x]==1:continue
+		var duplicate=false
+		for other in state.data.world.sources:
+			if other.amount>0 and other.x==source.x and other.y==source.y:duplicate=true;break
+		if not duplicate:source.amount=12
 
 func _check_goals():
 	for goal in Settlement.GOALS:

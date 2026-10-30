@@ -6,7 +6,8 @@ const Settlement=preload("res://scripts/settlement.gd")
 const WorldRules=preload("res://scripts/world_rules.gd")
 const Snapshot=preload("res://scripts/combat_snapshot.gd")
 const Logistics=preload("res://scripts/logistics.gd")
-const SAVE_VERSION=5
+const Commerce=preload("res://scripts/commerce.gd")
+const SAVE_VERSION=6
 var catalog=Catalog.new()
 var save_path="user://progress.json"
 var data:Dictionary={}
@@ -28,6 +29,7 @@ func reset():
 	for b in data.buildings:
 		b.width=int(catalog.building(b.id).width);b.height=int(catalog.building(b.id).height)
 	Settlement.initialize(data,catalog)
+	Commerce.initialize(data)
 	data["rules"]={"threat":"standard"}
 
 func new_game(seed_value:int,threat:String,title:String)->bool:
@@ -81,7 +83,7 @@ func _valid(d:Variant)->bool:
 		if not combat.has("complete") and combat.get("legacy",false)!=true:return false
 		for unit in combat.units:
 			if not unit.has("uid"):return false
-	return Settlement.valid(d,catalog)
+	return Settlement.valid(d,catalog) and Commerce.valid(d)
 
 func load_progress()->bool:
 	if not FileAccess.file_exists(save_path) and not FileAccess.file_exists(save_path+".bak"):return true
@@ -125,10 +127,11 @@ func _normalize():
 	if not data.world.get("combat",{}).is_empty():data.world.combat.next_uid=int(data.world.combat.next_uid)
 	if data.world.get("combat",{}).has("complete"):Snapshot.normalize(data.world.combat)
 	data.next_building_uid=int(data.next_building_uid)
+	for key in ["orders","income","completed"]:data.commerce[key]=int(data.commerce[key])
 	for key in data.stats:data.stats[key]=int(data.stats[key])
 
 func _migrate(value:Variant)->Variant:
-	if not value is Dictionary or value.get("version") not in [1,1.0,2,2.0,3,3.0,4,4.0]:return value
+	if not value is Dictionary or value.get("version") not in [1,1.0,2,2.0,3,3.0,4,4.0,5,5.0]:return value
 	var migrated=value.duplicate(true)
 	if migrated.version==1:
 		migrated.wood=migrated.get("wood",migrated.get("materials",180));migrated.erase("materials")
@@ -141,6 +144,7 @@ func _migrate(value:Variant)->Variant:
 	for b in migrated.buildings:
 		if not b is Dictionary or not catalog.data.buildings.has(b.get("id","")) or not WorldData.number(b.get("level")):return null
 	migrated.version=SAVE_VERSION;Settlement.initialize(migrated,catalog)
+	Commerce.initialize(migrated)
 	if not migrated.world.get("combat",{}).is_empty() and not migrated.world.combat.has("complete"):migrated.world.combat["legacy"]=true
 	return migrated
 

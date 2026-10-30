@@ -7,7 +7,11 @@ const GOALS=[
 	{"id":"industry","title":"Наладьте производство","hint":"Достройте лесопилку и шахту.","reward":60},
 	{"id":"food","title":"Обеспечьте стол","hint":"Доставьте с фермы 5 еды.","reward":45},
 	{"id":"people","title":"Поселение растёт","hint":"Постройте жильё и наймите до 5 рабочих.","reward":60},
-	{"id":"defense","title":"Первый рубеж","hint":"Отразите два набега.","reward":100}
+	{"id":"defense","title":"Первый рубеж","hint":"Отразите два набега.","reward":100},
+	{"id":"storage","title":"Организуйте снабжение","hint":"Достройте склад и доведите Штаб до второго уровня.","reward":65},
+	{"id":"commerce","title":"Доход от хозяйства","hint":"Выполните три экспортные поставки.","reward":65},
+	{"id":"garrison","title":"Подготовьте гарнизон","hint":"Достройте кузницу, наймите не менее трёх стражей и доведите армию до 24 бойцов.","reward":75},
+	{"id":"established","title":"Поселение закрепилось","hint":"Выполните рубежи снабжения, торговли и гарнизона; отразите пять нападений. После этого можно продолжать развитие.","reward":100}
 ]
 
 static func initialize(data:Dictionary,catalog):
@@ -102,4 +106,8 @@ static func goal_done(id:String,state)->bool:
 		"food":return state.data.stats.food_delivered>=5
 		"people":return state.data.world.workers.size()>=5 and state.level("house")>0
 		"defense":return state.data.world.raids_defeated>=2
+		"storage":return state.level("warehouse")>0 and state.level("hq")>=2
+		"commerce":return state.data.commerce.orders>=3
+		"garrison":return state.level("forge")>0 and state.data.army.guard>=3 and state.army_count()>=24
+		"established":return state.data.world.raids_defeated>=5 and ["storage","commerce","garrison"].all(func(id):return id in state.data.achieved)
 	return false
