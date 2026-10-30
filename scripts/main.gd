@@ -20,6 +20,7 @@ const Palette=preload("res://scripts/palette.gd")
 const Logistics=preload("res://scripts/logistics.gd")
 const Commerce=preload("res://scripts/commerce.gd")
 const Personnel=preload("res://scripts/personnel.gd")
+const AtlasView=preload("res://scripts/atlas_view.gd")
 const BG=Palette.BG
 const PANEL=Palette.PANEL
 const ACCENT=Palette.ACCENT
@@ -28,6 +29,7 @@ const MUTED=Palette.MUTED
 var state
 var world
 var base
+var map_view
 var combat
 var sidebar:VBoxContainer
 var resources:Label
@@ -70,7 +72,7 @@ func _ready():
 	if test_mode:session_started=true;start_menu.hide()
 	else:_open_main_menu()
 	if not state.warning.is_empty():_notice(state.warning,15)
-	print("GAMEKROLK_READY "+JSON.stringify({"version":"0.0.7","save":ProjectSettings.globalize_path(state.save_path),"renderer":RenderingServer.get_current_rendering_method()}))
+	print("GAMEKROLK_READY "+JSON.stringify({"version":"0.0.8","save":ProjectSettings.globalize_path(state.save_path),"renderer":RenderingServer.get_current_rendering_method()}))
 
 func _style(color:Color,border:Color=Color.TRANSPARENT,radius:int=10)->StyleBoxFlat:
 	var s=StyleBoxFlat.new();s.bg_color=color
@@ -101,7 +103,7 @@ func _setup_ui():
 	var header=HBoxContainer.new();root.add_child(header)
 	var brand=VBoxContainer.new();brand.size_flags_horizontal=Control.SIZE_EXPAND_FILL;brand.add_theme_constant_override("separation",1);header.add_child(brand)
 	title=_label("КРОЛИК  /  ЦИТАДЕЛЬ",29,ACCENT);brand.add_child(title)
-	subtitle=_label("ЖИВОЙ УЧАСТОК    ·    прототип 0.0.7    ·    хозяйство и оборона",12,MUTED);brand.add_child(subtitle)
+	subtitle=_label("МИР И ПОСЕЛЕНИЕ    ·    прототип 0.0.8    ·    хозяйство и оборона",12,MUTED);brand.add_child(subtitle)
 	header.add_child(_button("Сохранить",func():_notice("Прогресс сохранён." if state.save_progress() else state.warning)))
 	header.add_child(_button("Меню",_open_main_menu))
 	header.add_child(_button("Во весь экран  F11",_fullscreen))
@@ -111,6 +113,8 @@ func _setup_ui():
 	var stage=PanelContainer.new();stage.size_flags_horizontal=Control.SIZE_EXPAND_FILL;stage.size_flags_vertical=Control.SIZE_EXPAND_FILL;content.add_child(stage)
 	var layers=Control.new();layers.custom_minimum_size=Vector2(640,460);layers.size_flags_vertical=Control.SIZE_EXPAND_FILL;layers.size_flags_horizontal=Control.SIZE_EXPAND_FILL;stage.add_child(layers)
 	base=BaseView.new();base.state=state;base.world=world;base.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT);layers.add_child(base);base.cell_clicked.connect(_base_click);base.order_requested.connect(world.order)
+	map_view=AtlasView.new();map_view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT);layers.add_child(map_view);map_view.hide()
+	map_view.selected_region.connect(func(point):map_view.selected=point;_refresh())
 	combat=BattleView.new();combat.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT);layers.add_child(combat);combat.hide();combat.ended.connect(_battle_ended);combat.notice.connect(_notice)
 	var side=PanelContainer.new();side.custom_minimum_size.x=340;content.add_child(side)
 	var scroll=ScrollContainer.new();scroll.horizontal_scroll_mode=ScrollContainer.SCROLL_MODE_DISABLED;side.add_child(scroll)
@@ -133,7 +137,9 @@ func _refresh():
 	_update_resources();live_labels.clear();_clear(toolbar);_clear(sidebar)
 	if in_battle:_battle_ui();return
 	if not state.data.world.raid_active:world.sync_army()
-	for entry in [["build","Строить"],["people","Люди"],["logistics","Снабжение"],["trade","Поставки"],["goals","Рубежи"],["orders","Приказы"],["heroes","Герои"],["army","Армия"],["medical","Лазарет"],["officers","Должности"],["tech","Технологии"]]:
+	if tab=="map":map_view.activate(world.regional);map_view.show();base.hide()
+	else:map_view.hide();base.show()
+	for entry in [["map","Мир"],["build","Строить"],["people","Люди"],["logistics","Снабжение"],["trade","Поставки"],["goals","Рубежи"],["orders","Приказы"],["heroes","Герои"],["army","Армия"],["medical","Лазарет"],["officers","Должности"],["tech","Технологии"]]:
 		var b=_button(entry[1],_set_tab.bind(entry[0]),tab==entry[0]);toolbar.add_child(b)
 	var spacer=Control.new();spacer.size_flags_horizontal=Control.SIZE_EXPAND_FILL;toolbar.add_child(spacer)
 	toolbar.add_child(_button("Продолжить" if world.paused else "Пауза  P",_pause_world))
@@ -142,6 +148,7 @@ func _refresh():
 		toolbar.add_child(_button("Полигон",func():_start_battle("hero")))
 		toolbar.add_child(_button("Проверить набег",_trigger_raid,true))
 	match tab:
+		"map":_atlas_ui()
 		"build":_build_ui()
 		"people":_people_ui()
 		"logistics":_logistics_ui()
@@ -160,7 +167,8 @@ func _set_tab(value:String):
 
 func _update_resources():
 	var raid="НАБЕГ!" if state.data.world.raid_active else "НАБЕГ ЧЕРЕЗ %02d:%02d"%[int(state.data.world.raid_in)/60,int(state.data.world.raid_in)%60]
-	resources.text="МОНЕТЫ %d    ДРЕВЕСИНА %d    КАМЕНЬ %d    ПРОВИАНТ %d    АРМИЯ %d/%d    %s"%[state.data.coins,state.data.wood,state.data.stone,state.data.food,state.army_count(),state.capacity(),raid]
+	var troops=str(state.army_count())+(" + %d в походе"%state.army_away() if state.army_away()>0 else "")
+	resources.text="МОНЕТЫ %d    ДРЕВЕСИНА %d    КАМЕНЬ %d    ПРОВИАНТ %d    АРМИЯ %s/%d    %s"%[state.data.coins,state.data.wood,state.data.stone,state.data.food,troops,state.capacity(),raid]
 
 func _heading(text:String):sidebar.add_child(_label(text,21,ACCENT))
 func _hint(text:String):sidebar.add_child(_label(text,14,MUTED))
@@ -273,6 +281,7 @@ func _select_hero(id:String):
 
 func _army_ui():
 	_heading("Соберите свой полк")
+	if state.army_away()>0:_hint("%d мечника находятся в походе. Их места остаются занятыми до возвращения."%state.army_away())
 	_hint(state.data.personnel.last_report)
 	_hint("Половина выбывших бойцов каждого типа попадает в раненые с округлением вниз; остальные погибают. Лазарет позволяет вернуть раненых вместо нового найма.")
 	_hint("Бойцы защищают этот участок от набегов. Потери сохраняются; полигон служит отдельной тренировкой.")
@@ -337,6 +346,7 @@ func _start_battle(kind:String):
 	if kind=="siege":
 		var error=state.begin_siege()
 		if not error.is_empty():_notice(error);return
+	map_view.hide()
 	benchmark_mode=kind!="siege"
 	var army=state.data.army.duplicate()
 	var count=26+int(state.data.war_rank)*7
@@ -563,6 +573,12 @@ func _resolve_selected():
 
 func _update_live():
 	if in_battle:return
+	if live_labels.has("expedition"):
+		var e=state.data.regional.expedition
+		if e.is_empty():live_labels.expedition.text="Отряд дома · завершено походов: %d"%state.data.regional.completed
+		else:
+			var phase={"outbound":"В пути к области","gather":"Выполняет поручение","return":"Возвращается","waiting":"Ожидает окончания нападения у дома"}[e.phase]
+			live_labels.expedition.text="%s\nПозиция %d,%d · груз %d дерева / %d камня\nДва мечника вне гарнизона"%[phase,e.path[int(e.index)][0],e.path[int(e.index)][1],e.cargo.wood,e.cargo.stone]
 	for post in Personnel.POSTS:
 		if live_labels.has("post_"+post):
 			var person=Personnel.holder(state.data,post)
@@ -639,6 +655,49 @@ func _trade_ui():
 	_hint("Обозы здесь считаются по времени, отдельной фигурки на карте пока нет. Покупка и награды могут временно превысить предел склада; новая добыча ждёт места.")
 	_update_live()
 
+func _atlas_ui():
+	var model=world.regional;var point=map_view.selected
+	_heading("Земли за поселением")
+	_hint("Поселение продолжает работать, пока вы смотрите карту. Походный отряд временно уменьшает гарнизон.")
+	var row=HFlowContainer.new();sidebar.add_child(row)
+	row.add_child(_button("Карта мира",func():map_view.mode="overview";_refresh(),map_view.mode=="overview"))
+	row.add_child(_button("Область",func():map_view.mode="region";_refresh(),map_view.mode=="region"))
+	row.add_child(_button("Окрестности",func():map_view.mode="nearby";_refresh(),map_view.mode=="nearby"))
+	if map_view.mode!="overview":
+		var arrows=HBoxContainer.new();sidebar.add_child(arrows)
+		for direction in [["←",Vector2i.LEFT],["↑",Vector2i.UP],["↓",Vector2i.DOWN],["→",Vector2i.RIGHT]]:arrows.add_child(_button(direction[0],_atlas_shift.bind(direction[1])))
+	sidebar.add_child(_button("Найти поселение",func():map_view.selected=model.home();map_view.zoom=1;map_view.pan=Vector2.ZERO;map_view.mode="overview";_refresh()))
+	_line()
+	var index=model.atlas.index(point)
+	_hint("Область %d,%d · %s%s"%[point.x,point.y,model.atlas.NAMES[model.atlas.biomes[index]]," · река" if model.atlas.river(point) else ""])
+	if point==model.home():
+		_hint("Ваше поселение. Его земля, постройки и люди сохранены без перегенерации.")
+		sidebar.add_child(_button("К поселению",_set_tab.bind("build"),true))
+	elif model.known(point):
+		_hint("Изученные запасы: дерево %d · камень %d"%[model.remaining(point,"wood"),model.remaining(point,"stone")])
+	else:_hint("Местность ещё не разведана. Подробные запасы откроются после прибытия отряда.")
+	var path=model.route(point);map_view.preview_path=path
+	if point!=model.home():
+		if path.is_empty():_hint("Сухопутный путь не найден. Морские переходы пока недоступны.")
+		else:_hint("Путь: %d переходов · около %d с туда и обратно + 12 с на месте."%[path.size()-1,(path.size()-1)*4])
+		for entry in [["survey","Разведать область"],["wood","Вывезти до 25 дерева"],["stone","Вывезти до 25 камня"]]:
+			var button=_button(entry[1],_send_expedition.bind(point,entry[0]),entry[0]=="survey")
+			button.tooltip_text=model.reason(point,entry[0]);button.disabled=not button.tooltip_text.is_empty();sidebar.add_child(button)
+		_hint("На поход нужны 2 мечника и 3 провианта. Запасы конечны; груз поступает только после возвращения.")
+	_line();var status=_label("",15,ACCENT);live_labels.expedition=status;sidebar.add_child(status)
+	if not state.data.regional.expedition.is_empty():sidebar.add_child(_button("Отозвать отряд",func():_notice(model.recall());_refresh()))
+	_hint("Разведка открывает местные запасы. Отряд работает на обзорной карте; дом продолжает добычу и оборону. На время нападения возвращающийся отряд ждёт у поселения.")
+	if map_view.mode=="nearby":map_view.prepare_nearby()
+	_update_live()
+
+func _send_expedition(point:Vector2i,operation:String):
+	_notice(world.regional.send(point,operation));world.sync_army();state.save_progress();_refresh()
+
+func _atlas_shift(direction:Vector2i):
+	var point=map_view.selected+direction
+	if not world.regional.atlas.inside(point):_notice("Достигнут край карты.");return
+	map_view.selected=point;_refresh()
+
 func _medical_ui():
 	_heading("Лазарет гарнизона")
 	_hint(state.data.personnel.last_report)
@@ -684,6 +743,7 @@ func _activate_party(next):
 	state.before_save=Callable()
 	for connection in base.order_requested.get_connections():base.order_requested.disconnect(connection.callable)
 	state=next;world=World.new(state);base.state=state;base.world=world;base.order_requested.connect(world.order)
+	map_view.model=null;map_view.texture=null
 	world.notice.connect(_notice);world.raid_finished.connect(func(_won):_refresh());world.settlement_changed.connect(func():call_deferred("_refresh"))
 	combat.running=false;combat.hide();base.show();result_dialog.hide();retreat_dialog.hide()
 	in_battle=false;benchmark_mode=false;session_started=true;autosave_clock=0;tab="build"

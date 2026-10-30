@@ -8,7 +8,8 @@ const Snapshot=preload("res://scripts/combat_snapshot.gd")
 const Logistics=preload("res://scripts/logistics.gd")
 const Commerce=preload("res://scripts/commerce.gd")
 const Personnel=preload("res://scripts/personnel.gd")
-const SAVE_VERSION=7
+const Regional=preload("res://scripts/regional_world.gd")
+const SAVE_VERSION=8
 var catalog=Catalog.new()
 var save_path="user://progress.json"
 var data:Dictionary={}
@@ -32,12 +33,14 @@ func reset():
 	Settlement.initialize(data,catalog)
 	Commerce.initialize(data)
 	Personnel.initialize(data)
+	Regional.initialize(data)
 	data["rules"]={"threat":"standard"}
 
 func new_game(seed_value:int,threat:String,title:String)->bool:
 	if seed_value<1 or seed_value>2147483647 or threat not in WorldRules.MODES or title.strip_edges().length()>40:return false
 	reset();data.world=WorldData.generate(seed_value);Settlement.initialize(data,catalog)
 	Personnel.initialize(data)
+	data.erase("regional");Regional.initialize(data)
 	data.selected_hero="warden"
 	data.rules.threat=threat;data.world.raid_in=WorldRules.MODES[threat].first
 	data["profile"]={"name":title.strip_edges() if not title.strip_edges().is_empty() else "Новое поселение","created":Time.get_unix_time_from_system()}
@@ -87,7 +90,7 @@ func _valid(d:Variant)->bool:
 		if not combat.has("complete") and combat.get("legacy",false)!=true:return false
 		for unit in combat.units:
 			if not unit.has("uid"):return false
-	return Settlement.valid(d,catalog) and Commerce.valid(d) and Personnel.valid(d)
+	return Settlement.valid(d,catalog) and Commerce.valid(d) and Personnel.valid(d) and Regional.valid(d)
 
 func load_progress()->bool:
 	if not FileAccess.file_exists(save_path) and not FileAccess.file_exists(save_path+".bak"):return true
@@ -136,10 +139,22 @@ func _normalize():
 	for post in Personnel.POSTS:data.personnel.posts[post]=int(data.personnel.posts[post])
 	for kind in data.personnel.wounded:data.personnel.wounded[kind]=int(data.personnel.wounded[kind])
 	for key in ["treated","lost"]:data.personnel[key]=int(data.personnel[key])
+	var map=data.regional
+	for key in ["version","generator","seed","size","completed"]:map[key]=int(map[key])
+	for i in 2:map.home[i]=int(map.home[i])
+	for chunk in map.changes:
+		for source in map.changes[chunk]:map.changes[chunk][source]=int(map.changes[chunk][source])
+	if not map.expedition.is_empty():
+		var expedition=map.expedition
+		for i in 2:expedition.destination[i]=int(expedition.destination[i])
+		for point in expedition.path:
+			for i in 2:point[i]=int(point[i])
+		for key in ["index","crew"]:expedition[key]=int(expedition[key])
+		for key in ["wood","stone"]:expedition.cargo[key]=int(expedition.cargo[key])
 	for key in data.stats:data.stats[key]=int(data.stats[key])
 
 func _migrate(value:Variant)->Variant:
-	if not value is Dictionary or value.get("version") not in [1,1.0,2,2.0,3,3.0,4,4.0,5,5.0,6,6.0]:return value
+	if not value is Dictionary or value.get("version") not in [1,1.0,2,2.0,3,3.0,4,4.0,5,5.0,6,6.0,7,7.0]:return value
 	var migrated=value.duplicate(true)
 	if migrated.version==1:
 		migrated.wood=migrated.get("wood",migrated.get("materials",180));migrated.erase("materials")
@@ -154,6 +169,7 @@ func _migrate(value:Variant)->Variant:
 	migrated.version=SAVE_VERSION;Settlement.initialize(migrated,catalog)
 	Commerce.initialize(migrated)
 	Personnel.initialize(migrated)
+	Regional.initialize(migrated)
 	if not migrated.world.get("combat",{}).is_empty() and not migrated.world.combat.has("complete"):migrated.world.combat["legacy"]=true
 	return migrated
 
@@ -203,6 +219,9 @@ func army_count()->int:
 	var total=0
 	for value in data.army.values():total+=int(value)
 	return total
+
+func army_away()->int:return int(data.regional.expedition.get("crew",0))
+func army_total()->int:return army_count()+army_away()
 
 func hero_level(id:String)->int:return 1+int(data.xp[id])/60
 
@@ -278,8 +297,8 @@ func research(id:String)->String:
 func recruit(id:String)->String:
 	if data.world.raid_active:return "Пополнение доступно после нападения."
 	if not catalog.data.troops.has(id):return "Неизвестный тип бойца."
-	if id=="guard" and level("forge")==0:return "Для стражей нужна кузница."
-	if army_count()>=capacity():return "Армия заполнена. Улучшите Штаб или Казармы."
+	if id=="guard" and level("forge")==0:return "Для щитоносцев нужна кузница."
+	if army_total()>=capacity():return "Армия заполнена. Места походного отряда зарезервированы. Улучшите Штаб или Казармы."
 	var cost=int(catalog.troop(id).coins)
 	if data.coins<cost:return "Недостаточно монет."
 	data.coins-=cost;data.army[id]+=1;save_progress();return "Нанят: "+catalog.troop(id).name
@@ -313,7 +332,7 @@ func automate()->Dictionary:
 		while data.food<12 and data.coins>=4:
 			data.food+=1;data.coins-=4;out.food+=1;out.spent+=4
 	if Personnel.ready(data,"commander") and data.auto_recruit:
-		while data.army.militia<12 and army_count()<capacity() and data.coins>=int(catalog.troop("militia").coins):
+		while data.army.militia<12 and army_total()<capacity() and data.coins>=int(catalog.troop("militia").coins):
 			data.army.militia+=1;data.coins-=int(catalog.troop("militia").coins);out.recruited+=1;out.spent+=int(catalog.troop("militia").coins)
 	return out
 

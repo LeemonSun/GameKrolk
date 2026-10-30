@@ -93,7 +93,7 @@ static func treatment_reason(state)->String:
 	var total=0
 	for amount in state.data.personnel.wounded.values():total+=int(amount)
 	if total==0:return "Раненых нет."
-	if state.army_count()>=state.capacity():return "Нет места в гарнизоне для возвращения бойца."
+	if state.army_total()>=state.capacity():return "Нет места для возвращения бойца. Места походного отряда зарезервированы."
 	if state.data.coins<3 or state.data.food<2:return "На бойца нужно 3 монеты и 2 провианта."
 	return ""
 

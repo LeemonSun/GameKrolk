@@ -16,6 +16,8 @@ const Snapshot=preload("res://scripts/combat_snapshot.gd")
 const Logistics=preload("res://scripts/logistics.gd")
 const Commerce=preload("res://scripts/commerce.gd")
 const Personnel=preload("res://scripts/personnel.gd")
+const Regional=preload("res://scripts/regional_world.gd")
+var regional
 var command_mode="advance"
 var navigation_signature=0
 var state
@@ -32,6 +34,7 @@ var synced={}
 
 func _init(game_state):
 	state=game_state
+	regional=Regional.new(state)
 	rebuild_navigation()
 	_initialize_battle()
 	var complete=_restore_combat()
@@ -354,6 +357,10 @@ func _tick(dt:float):
 	if not delivery.is_empty():notice.emit(delivery);settlement_changed.emit()
 	var medical=Personnel.tick(state,dt)
 	if not medical.is_empty():sync_army();notice.emit(medical);settlement_changed.emit()
+	var expedition=regional.tick(dt)
+	if not expedition.is_empty():
+		if state.data.regional.expedition.is_empty():sync_army()
+		notice.emit(expedition);settlement_changed.emit()
 	chase_clock+=dt
 	if chase_clock>=0.5:chase_clock=0;_update_chase_paths()
 	if job_timer>2:job_timer=0;_assign_jobs();_check_goals()
